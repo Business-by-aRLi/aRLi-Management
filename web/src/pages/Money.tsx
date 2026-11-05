@@ -6,8 +6,9 @@ import {
 import { date, money } from "../lib/format";
 import { Button, Card, Empty, ErrorNote, Field, Input, Loading, Modal, Num, PageTitle, Select } from "../components/ui";
 import { ExpenseForm, IncomeForm, SettlementForm } from "../components/forms";
+import { DocumentUpload } from "../components/DocumentUpload";
 
-type Tab = "expenses" | "income" | "settlements" | "recurring";
+type Tab = "expenses" | "income" | "settlements" | "recurring" | "document";
 const TABS: [Tab, string][] = [["expenses", "הוצאות"], ["income", "הכנסות"], ["settlements", "התחשבנויות"], ["recurring", "עלויות שוטפות"]];
 
 export default function Money() {
@@ -19,7 +20,8 @@ export default function Money() {
     <div>
       <PageTitle eyebrow="כספים" title="כל תנועה, ומי שילמה." action={
         <div className="flex flex-wrap gap-2">
-          <Button arrow className="group" onClick={() => setModal({ kind: "expenses" })}>הוצאה</Button>
+          <Button arrow className="group" onClick={() => setModal({ kind: "document" })}>העלאת מסמך</Button>
+          <Button variant="ghost" onClick={() => setModal({ kind: "expenses" })}>הוצאה</Button>
           <Button variant="ghost" onClick={() => setModal({ kind: "income" })}>הכנסה</Button>
           <Button variant="ghost" onClick={() => setModal({ kind: "settlements" })}>התחשבנות</Button>
         </div>
@@ -42,6 +44,9 @@ export default function Money() {
       </Modal>
       <Modal open={modal?.kind === "income"} onClose={close} title={modal?.row ? "עריכת הכנסה" : "הכנסה חדשה"}>
         <IncomeForm row={modal?.row as Income | undefined} onDone={close} />
+      </Modal>
+      <Modal open={modal?.kind === "document"} onClose={close} title="העלאת מסמך">
+        <DocumentUpload onDone={close} />
       </Modal>
       <Modal open={modal?.kind === "settlements"} onClose={close} title="התחשבנות חדשה">
         <SettlementForm onDone={close} />
@@ -87,7 +92,7 @@ function ExpensesList({ onEdit }: { onEdit: (r: Expense) => void }) {
     <Card>
       <Filters {...{ projectId, setProjectId, partnerId, setPartnerId, month, setMonth }} />
       <Total rows={rows} />
-      {!rows.length && <Empty>אין הוצאות. אפשר להוסיף כאן או לשלוח לבוט צילום חשבונית.</Empty>}
+      {!rows.length && <Empty>אין הוצאות. אפשר להעלות כאן חשבונית, או לשלוח לבוט צילום שלה.</Empty>}
       {rows.map((r) => (
         <div key={r.id} className="row-line grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 py-3 sm:grid-cols-[90px_1fr_auto_auto]">
           <span className="text-[14px] text-mute"><Num>{date(r.spent_on)}</Num></span>

@@ -13,12 +13,12 @@ export type Financials = { project_id: string; name: string; type: string; statu
 export type Balance = { partner_id: string; name: string; entitled: number; held: number; net_position: number };
 export type Expense = {
   id: string; spent_on: string; amount: number; description: string; category: string | null; reference: string | null;
-  receipt_path: string | null; project_id: string | null; paid_by_partner_id: string | null;
+  receipt_path: string | null; notes?: string | null; project_id: string | null; paid_by_partner_id: string | null;
   projects?: { name: string } | null; partners?: { name: string } | null;
 };
 export type Income = {
   id: string; received_on: string; amount: number; method: string | null; notes: string | null;
-  project_id: string | null; received_by_partner_id: string | null;
+  reference: string | null; receipt_path: string | null; project_id: string | null; received_by_partner_id: string | null;
   projects?: { name: string } | null; partners?: { name: string } | null;
 };
 export type Settlement = { id: string; settled_on: string; amount: number; from_partner_id: string; to_partner_id: string; notes: string | null };
@@ -93,4 +93,26 @@ export async function uploadReceipt(file: File) {
   const path = `${new Date().toISOString().slice(0, 7)}/${crypto.randomUUID()}.${ext}`;
   must(await supabase.storage.from("receipts").upload(path, file, { contentType: file.type }));
   return path;
+}
+
+export async function deleteReceipt(path: string) {
+  await supabase.storage.from("receipts").remove([path]);
+}
+
+// What the parse-document function read from an uploaded invoice / receipt. Every field may be missing.
+export type ParsedDocument = {
+  is_financial_document: boolean; kind: "expense" | "income"; confidence: "high" | "medium" | "low";
+  counterparty?: string; amount?: number; currency: string; date?: string; invoice_number?: string;
+  description?: string; category?: string; project_id: string | null; payment_method?: string; note?: string;
+  duplicates: { table: string; id: string; date: string; amount: number }[];
+};
+
+export async function parseDocument(path: string): Promise<ParsedDocument> {
+  const { data, error } = await supabase.functions.invoke("parse-document", { body: { path } });
+  if (error) {
+    // The function answers errors as { error: "..." } in Hebrew; show that when we have it.
+    const body = await (error as { context?: Response }).context?.json?.().catch(() => null);
+    throw new Error(body?.error ?? "לא הצלחתי לקרוא את המסמך. אפשר למלא ידנית.");
+  }
+  return data as ParsedDocument;
 }
