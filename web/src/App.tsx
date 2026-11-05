@@ -3,7 +3,7 @@ import { NavLink, Route, Routes } from "react-router-dom";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
 import { usePartners } from "./lib/data";
-import { Loading } from "./components/ui";
+import { Button, Loading, Modal } from "./components/ui";
 import Login from "./pages/Login";
 import TwoFactor from "./pages/TwoFactor";
 import Dashboard from "./pages/Dashboard";
@@ -47,6 +47,7 @@ export default function App() {
 function Shell({ email }: { email: string }) {
   // RLS returns no partners at all to a user who is not linked to one.
   const partners = usePartners();
+  const [askLogout, setAskLogout] = useState(false);
   if (partners.isLoading) return <Loading />;
   if (!partners.data?.length) {
     return (
@@ -71,8 +72,16 @@ function Shell({ email }: { email: string }) {
             {label}
           </NavLink>
         ))}
-        <button onClick={() => supabase.auth.signOut()} className="hidden px-3 text-[14px] text-mute-2 hover:text-bone md:inline">יציאה</button>
+        <button onClick={() => setAskLogout(true)} className="whitespace-nowrap px-3 text-[14px] text-mute-2 hover:text-bone">יציאה</button>
       </nav>
+
+      <Modal open={askLogout} onClose={() => setAskLogout(false)} title="להתנתק מהמערכת?">
+        <p className="mb-6 text-mute">בכניסה הבאה תצטרכי קישור חדש מהמייל וקוד מאפליקציית האימות.</p>
+        <div className="flex gap-3">
+          <Button arrow className="group" onClick={() => supabase.auth.signOut()}>כן, להתנתק</Button>
+          <Button variant="ghost" onClick={() => setAskLogout(false)}>להישאר</Button>
+        </div>
+      </Modal>
 
       <main className="mx-auto max-w-[1180px] px-[var(--gutter)] pt-10 md:pt-32">
         <Routes>
