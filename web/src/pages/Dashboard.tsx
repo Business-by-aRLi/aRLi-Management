@@ -6,8 +6,9 @@ import {
   useBalances, useExpenses, useIdeas, useIncome, useMeetings, useProjects, useRemove, useSave, useTasks, useTime, useWorkPlans,
   type Idea, type WorkPlan,
 } from "../lib/data";
-import { dateTime, money, today } from "../lib/format";
-import { Button, Card, Eyebrow, Input, Modal, Num, Pill } from "../components/ui";
+import { money, today } from "../lib/format";
+import { Button, Card, Eyebrow, IconButton, Input, Modal, Num, Pill, useConfirm } from "../components/ui";
+import { Icon } from "../components/icons";
 import { PlanForm, SettlementForm, useMe } from "../components/forms";
 import Gantt from "../components/Gantt";
 
@@ -33,7 +34,6 @@ export default function Dashboard() {
   const openThisMonth = monthTasks.filter((t) => t.status !== "done").length;
   const monthIncome = (income.data ?? []).filter((i) => i.received_on.startsWith(m)).reduce((s, i) => s + Number(i.amount), 0);
   const createMinutes = (time.data ?? []).filter((t) => t.work_date.startsWith(m)).reduce((s, t) => s + t.minutes, 0);
-  const liveIdeas = (ideas.data ?? []).filter((i) => i.status !== "parked").length;
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "בוקר טוב" : hour < 17 ? "צהריים טובים" : hour < 21 ? "ערב טוב" : "לילה טוב";
   const line = LINES[new Date().getDate() % LINES.length];
@@ -49,18 +49,18 @@ export default function Dashboard() {
       </section>
 
       {/* Momentum */}
-      <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <section className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <Momentum value={String(doneThisMonth)} label="משימות שסגרנו החודש" ring={monthTasks.length ? doneThisMonth / Math.max(1, doneThisMonth + openThisMonth) : 0} />
         <Momentum value={String(openThisMonth)} label="משימות בדרך החודש" />
         <Momentum value={money(monthIncome)} label="נכנס החודש" />
-        <Momentum value={`${Math.round(createMinutes / 60)}`} suffix="ש׳" label={`שעות יצירה · ${liveIdeas} יוזמות חיות`} />
+        <Momentum value={`${Math.round(createMinutes / 60)}`} suffix="ש׳" label="שעות יצירה החודש" />
       </section>
 
       {/* The month's plan */}
       <Card>
         <div className="mb-2 flex items-baseline justify-between gap-3">
           <h2 className="text-[clamp(24px,2.2vw,32px)] font-semibold">התוכנית של החודש</h2>
-          <Link to="/tasks" className="text-[15px] text-pink">לוח משימות ←</Link>
+          <Link to="/tasks" className="shrink-0 text-[15px] text-pink hover:text-pink-soft">לוח משימות ←</Link>
         </div>
         <Gantt tasks={tasks.data ?? []} projects={projects.data ?? []} month={month} onMonth={setMonth} />
       </Card>
@@ -81,18 +81,16 @@ export default function Dashboard() {
 function Momentum({ value, label, ring, suffix }: { value: string; label: string; ring?: number; suffix?: string }) {
   return (
     <Card>
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-[clamp(28px,2.8vw,42px)] font-light leading-none text-pink"><Num>{value}</Num>{suffix && <span className="ms-1 text-[0.5em]">{suffix}</span>}</div>
-          <div className="mt-2 text-[15px] text-mute">{label}</div>
-        </div>
+      <div className="relative">
         {ring !== undefined && (
-          <svg viewBox="0 0 36 36" className="size-12 shrink-0 -rotate-90" aria-hidden>
-            <circle cx="18" cy="18" r="15.5" fill="none" stroke="var(--line-2)" strokeWidth="3" />
-            <circle cx="18" cy="18" r="15.5" fill="none" stroke="var(--pink)" strokeWidth="3" strokeLinecap="round"
+          <svg viewBox="0 0 36 36" className="absolute top-0 end-0 size-9 -rotate-90 sm:size-11" role="img" aria-label={`${Math.round(ring * 100)}% מהמשימות של החודש נסגרו`}>
+            <circle cx="18" cy="18" r="15.5" fill="none" stroke="var(--line-2)" strokeWidth="3.5" />
+            <circle cx="18" cy="18" r="15.5" fill="none" stroke="var(--pink)" strokeWidth="3.5" strokeLinecap="round"
               strokeDasharray={`${ring * 97.4} 97.4`} style={{ transition: "stroke-dasharray .8s var(--ease)" }} />
           </svg>
         )}
+        <div className="text-[clamp(30px,2.8vw,42px)] font-light leading-none text-pink"><Num>{value}</Num>{suffix && <span className="ms-1 text-[0.5em]">{suffix}</span>}</div>
+        <div className="mt-2.5 text-[15px] leading-snug text-mute">{label}</div>
       </div>
     </Card>
   );
@@ -110,7 +108,7 @@ function Goals() {
     <Card>
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-[24px] font-semibold">היעדים שלנו</h2>
-        <Button variant="quiet" className="text-pink" onClick={() => setModal({})}>+ יעד</Button>
+        <Button variant="quiet" className="!text-pink hover:!text-pink-soft" onClick={() => setModal({})}><Icon name="plus" size={16} />יעד</Button>
       </div>
       {!current.length && (
         <div className="py-6">
@@ -123,7 +121,7 @@ function Goals() {
         const done = linked.filter((x) => x.status === "done").length;
         const pct = linked.length ? Math.round((done / linked.length) * 100) : 0;
         return (
-          <button key={p.id} onClick={() => setModal({ row: p })} className="row-line block w-full py-4 text-start">
+          <button key={p.id} onClick={() => setModal({ row: p })} className="row-line row-btn block w-[calc(100%+20px)] py-4 text-start">
             <div className="flex items-baseline justify-between gap-3">
               <span className="text-[18px] font-medium">{p.title}</span>
               <span className="text-[14px] text-mute"><Num>{pct}%</Num></span>
@@ -150,13 +148,14 @@ const IDEA_NEXT: Record<string, string> = { idea: "exploring", exploring: "go", 
 function IdeasBoard({ ideas, meId }: { ideas: Idea[]; meId?: string }) {
   const save = useSave("ideas");
   const remove = useRemove("ideas");
+  const confirm = useConfirm();
   const [title, setTitle] = useState("");
   const visible = ideas.filter((i) => i.status !== "parked").slice(0, 8);
 
   return (
     <Card>
       <h2 className="text-[24px] font-semibold">יוזמות ורעיונות</h2>
-      <p className="mb-4 text-[15px] text-mute">כל רעיון נכנס לכאן, גם אם הוא רק התחלה.</p>
+      <p className="mb-4 text-[15px] text-mute">כל רעיון נכנס לכאן, גם אם הוא רק התחלה. לחיצה על התגית מקדמת אותו שלב.</p>
       <form className="mb-4 flex gap-2" onSubmit={async (e) => {
         e.preventDefault();
         if (!title.trim()) return;
@@ -171,10 +170,10 @@ function IdeasBoard({ ideas, meId }: { ideas: Idea[]; meId?: string }) {
         <div key={i.id} className="row-line flex items-center justify-between gap-3 py-3">
           <span>{i.title}{i.partners?.name && <span className="text-mute-2"> · {i.partners.name}</span>}</span>
           <span className="flex shrink-0 items-center gap-1">
-            <button onClick={() => save.mutate({ id: i.id, values: { status: IDEA_NEXT[i.status] } })} title="לשלב הבא">
+            <button className="press" onClick={() => save.mutate({ id: i.id, values: { status: IDEA_NEXT[i.status] } })} title={`להעביר ל"${IDEA_STATUS[IDEA_NEXT[i.status]]}"`}>
               <Pill tone={i.status === "go" ? "pink" : "mute"}>{IDEA_STATUS[i.status]}</Pill>
             </button>
-            <button className="px-2 text-mute-2 hover:text-bone" onClick={() => confirm("למחוק את הרעיון?") && remove.mutate(i.id)} aria-label="מחיקה">×</button>
+            <IconButton icon="trash" size={32} label="מחיקת הרעיון" onClick={async () => (await confirm({ title: "למחוק את הרעיון?", body: i.title })) && remove.mutate(i.id)} />
           </span>
         </div>
       ))}
@@ -204,10 +203,10 @@ export function BalanceModule() {
     <Card>
       <div className="mb-1 flex items-center justify-between">
         <h2 className="text-[24px] font-semibold">התחשבנות</h2>
-        <Link to="/money" className="text-[15px] text-pink">לכספים ←</Link>
+        <Link to="/money" className="text-[15px] text-pink hover:text-pink-soft">לכספים ←</Link>
       </div>
       <p className="mb-5 text-[15px] text-mute">
-        {owes && owed ? <>כדי להתאזן, {owes.name} מעבירה ל{owed.name} <span className="text-bone"><Num>{money(owes.net_position)}</Num></span>.</> : "אתן מאוזנות. 👌"}
+        {owes && owed ? <>כדי להתאזן, {owes.name} מעבירה ל{owed.name} <span className="text-bone"><Num>{money(owes.net_position)}</Num></span>.</> : "אתן מאוזנות. אין מה להעביר."}
       </p>
       {rows.map((r) => (
         <div key={r.partner_id} className="mb-4">
@@ -245,13 +244,19 @@ function Upcoming() {
     <Card>
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-[24px] font-semibold">השבוע ביומן</h2>
-        <Link to="/calendar" className="text-[15px] text-pink">ליומן ←</Link>
+        <Link to="/calendar" className="text-[15px] text-pink hover:text-pink-soft">ליומן ←</Link>
       </div>
       {!meetings.data?.length && <p className="text-mute">שבוע פנוי לפגישות. אולי זה הזמן לפנות ללקוח חדש?</p>}
       {meetings.data?.map((m) => (
-        <div key={m.id} className="row-line flex items-center justify-between gap-3 py-3">
-          <span>{m.title}{m.location && <span className="text-mute"> · {m.location}</span>}</span>
-          <span className="shrink-0 text-[14px] text-mute">{dateTime(m.starts_at)}</span>
+        <div key={m.id} className="row-line flex items-center gap-4 py-3">
+          <span className="grid w-12 shrink-0 place-items-center rounded-[14px] bg-[var(--ink-3)] py-1.5 leading-tight shadow-[inset_0_0_0_1px_var(--line)]">
+            <span className="text-[12px] text-mute">{new Date(m.starts_at).toLocaleDateString("he-IL", { weekday: "short" })}</span>
+            <span className="text-[18px] font-semibold"><Num>{new Date(m.starts_at).getDate()}</Num></span>
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate">{m.title}</span>
+            <span className="block text-[14px] text-mute"><Num>{new Date(m.starts_at).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })}</Num>{m.location && ` · ${m.location}`}</span>
+          </span>
         </div>
       ))}
     </Card>

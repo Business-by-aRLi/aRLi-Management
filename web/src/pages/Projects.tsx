@@ -32,7 +32,7 @@ export default function Projects() {
               <h2 className="mb-3 text-[22px] font-semibold">{label}</h2>
               <Card>
                 {list.map((p) => (
-                  <Link key={p.id} to={`/projects/${p.id}`} className="row-line flex flex-wrap items-center justify-between gap-3 py-3 hover:text-pink-soft">
+                  <Link key={p.id} to={`/projects/${p.id}`} className="row-line row-btn flex flex-wrap items-center justify-between gap-3 py-3.5 hover:text-pink-soft">
                     <span className="flex items-center gap-3">
                       <span className="font-medium">{p.name}</span>
                       {p.clients?.name && <span className="text-mute">· {p.clients.name}</span>}
