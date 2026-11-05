@@ -31,3 +31,12 @@
 - כל שותפה מתחברת פעם אחת עם קוד חיבור אישי (`partners.telegram_link_code`).
 - `?action=setup` רושם את ה-webhook בטלגרם.
 - `?action=cron` רץ כל דקה (pg_cron) ושולח: תזכורות, התראה שעה לפני פגישה, דדליינים של משימות מ-08:00, וסיכום שבועי בימי ראשון ב-09:00.
+
+### חיבור Gmail לחשבוניות
+
+כל שותפה יכולה לחבר את תיבת ה-Gmail שלה (קריאה בלבד). אחרי החיבור אפשר לבקש מהבוט למשל "תמצאי את החשבוניות של Vercel מאוקטובר". הבוט מחפש, קורא את ה-PDF המצורף (או את גוף המייל), מציג סיכום, ורושם הוצאה רק אחרי אישור. הקובץ נשמר בדלי `receipts` תחת `gmail/`, ו-`expenses.gmail_message_id` מונע רישום כפול.
+
+- סיקרטים: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (לקוח OAuth מסוג Web application ב-Google Cloud, עם Gmail API מופעל).
+- Redirect URI מורשה: `https://yeapgpdxflrcttjxfrgl.supabase.co/functions/v1/telegram-bot/gmail/callback`
+- את מסך ההסכמה (OAuth consent screen) כדאי להעביר למצב "In production". במצב Testing ההרשאה פגה אחרי 7 ימים.
+- טבלאות: `gmail_accounts` (טוקנים, רק ה-service role ניגש), `gmail_oauth_states` (קישורי חיבור, תקפים 15 דקות).
