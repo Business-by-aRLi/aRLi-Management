@@ -1,0 +1,39 @@
+// One small icon set, drawn on a 24px grid with a 1.75 stroke, so every icon has the same weight.
+// Icons that point a direction (chevrons, arrows) are drawn for RTL: "forward" points left.
+import type { SVGProps } from "react";
+
+const PATHS = {
+  home: "M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1z",
+  tasks: "M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2",
+  calendar: "M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM4 10h16M8 3v4M16 3v4",
+  money: "M3 7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 10h18M7 15h3",
+  projects: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  time: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2",
+  more: "M5 12h.01M12 12h.01M19 12h.01",
+  plus: "M12 5v14M5 12h14",
+  close: "M6 6l12 12M18 6 6 18",
+  logout: "M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M9 8l-4 4 4 4M5 12h10",
+  trash: "M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3",
+  receipt: "M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6",
+  edit: "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4",
+  flag: "M5 21V4M5 4h11l-2 4 2 4H5",
+  chevronDown: "M6 9l6 6 6-6",
+  chevronNext: "M15 6l-6 6 6 6", // forward in RTL
+  chevronPrev: "M9 6l6 6-6 6", // back in RTL
+  idea: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.8V16h5v-.3c0-.7.4-1.4 1-1.8A6 6 0 0 0 12 3z",
+  income: "M12 19V5M6 11l6-6 6 6",
+  expense: "M12 5v14M6 13l6 6 6-6",
+  meeting: "M15 10l5-3v10l-5-3zM3 7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  check: "M5 12.5l4.5 4.5L19 7.5",
+} as const;
+
+export type IconName = keyof typeof PATHS;
+
+export function Icon({ name, size = 20, ...rest }: { name: IconName; size?: number } & SVGProps<SVGSVGElement>) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75}
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden {...rest}>
+      <path d={PATHS[name]} />
+    </svg>
+  );
+}

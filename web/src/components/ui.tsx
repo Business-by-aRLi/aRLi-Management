@@ -1,9 +1,14 @@
 // Small set of primitives in the aRLi style: pills, bezel cards, hairline inputs.
-import { useEffect, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, type SelectHTMLAttributes } from "react";
+import {
+  createContext, useCallback, useContext, useEffect, useRef, useState,
+  type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, type SelectHTMLAttributes,
+} from "react";
+import { Icon, type IconName } from "./icons";
 
 export function Button({ variant = "primary", arrow, className = "", children, ...rest }:
   ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "ghost" | "quiet"; arrow?: boolean }) {
-  const base = "inline-flex items-center gap-3 rounded-full font-semibold transition-colors duration-300 disabled:opacity-50 cursor-pointer";
+  // Every button answers the pointer: a colour step on hover and a small press on click.
+  const base = "press inline-flex items-center justify-center gap-3 rounded-full font-semibold transition-[background-color,color,box-shadow,transform] duration-300 disabled:opacity-50 disabled:pointer-events-none cursor-pointer";
   const styles = {
     primary: `bg-pink text-ink hover:bg-pink-hover ${arrow ? "ps-6 pe-1.5 py-1.5" : "px-6 py-2.5"} text-[16px]`,
     ghost: "text-bone px-6 py-2.5 shadow-[inset_0_0_0_1px_var(--line-2)] hover:bg-[var(--hover-veil)] text-[16px]",
@@ -15,6 +20,22 @@ export function Button({ variant = "primary", arrow, className = "", children, .
       {arrow && (
         <span className="grid size-9 place-items-center rounded-full bg-[var(--on-pink-veil)] transition-transform duration-500 group-hover:-translate-x-1" aria-hidden>←</span>
       )}
+    </button>
+  );
+}
+
+// A round icon-only button. The label is required: it is what a screen reader says, and the tooltip.
+export function IconButton({ icon, label, tone = "mute", size = 36, className = "", ...rest }:
+  ButtonHTMLAttributes<HTMLButtonElement> & { icon: IconName; label: string; tone?: "mute" | "ghost" | "pink"; size?: number }) {
+  const tones = {
+    mute: "text-mute hover:text-bone hover:bg-[var(--hover-veil)]",
+    ghost: "text-bone shadow-[inset_0_0_0_1px_var(--line-2)] hover:bg-[var(--hover-veil)]",
+    pink: "bg-pink text-ink hover:bg-pink-hover",
+  }[tone];
+  return (
+    <button type="button" aria-label={label} title={label} style={{ width: size, height: size }}
+      className={`press inline-grid shrink-0 place-items-center rounded-full transition-colors duration-300 cursor-pointer ${tones} ${className}`} {...rest}>
+      <Icon name={icon} size={Math.round(size * 0.5)} />
     </button>
   );
 }
@@ -50,36 +71,103 @@ export function Field({ label, children, hint }: { label: string; children: Reac
 }
 
 export const Input = (p: InputHTMLAttributes<HTMLInputElement>) => <input {...p} className={`field ${p.className ?? ""}`} />;
-export const Select = (p: SelectHTMLAttributes<HTMLSelectElement>) => <select {...p} className={`field ${p.className ?? ""}`} />;
+// A select gets a chevron, so it never looks like a plain text field.
+export const Select = ({ className = "", ...p }: SelectHTMLAttributes<HTMLSelectElement>) => (
+  <span className={`relative block ${className}`}>
+    <select {...p} className="field cursor-pointer pe-10" />
+    <Icon name="chevronDown" size={18} className="pointer-events-none absolute top-1/2 end-3.5 -translate-y-1/2 text-mute" />
+  </span>
+);
 export const Textarea = (p: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => <textarea rows={3} {...p} className={`field ${p.className ?? ""}`} />;
+
+// Month filter as a list of named months: clearer than the browser's month input, which shows "---------" when empty.
+export function MonthSelect({ value, onChange, allowAll = true, back = 12 }: { value: string; onChange: (v: string) => void; allowAll?: boolean; back?: number }) {
+  const now = new Date();
+  const months = Array.from({ length: back }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    return [`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, d.toLocaleDateString("he-IL", { month: "long", year: "numeric" })];
+  });
+  return (
+    <Select value={value} onChange={(e) => onChange(e.target.value)} aria-label="חודש">
+      {allowAll && <option value="">כל החודשים</option>}
+      {months.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+    </Select>
+  );
+}
+
+// Segmented control for tabs and quick filters.
+export function Segmented<T extends string>({ value, onChange, options, label }: { value: T; onChange: (v: T) => void; options: [T, string][]; label: string }) {
+  return (
+    <div role="tablist" aria-label={label} className="inline-flex max-w-full gap-1 overflow-x-auto rounded-full p-1 shadow-[inset_0_0_0_1px_var(--line)] no-scrollbar">
+      {options.map(([k, l]) => (
+        <button key={k} role="tab" aria-selected={value === k} onClick={() => onChange(k)}
+          className={`press whitespace-nowrap rounded-full px-4 py-1.5 text-[15px] font-medium transition-colors duration-300 ${value === k ? "bg-[var(--ink-3)] text-bone shadow-[inset_0_0_0_1px_var(--line-2)]" : "text-mute hover:text-bone"}`}>{l}</button>
+      ))}
+    </div>
+  );
+}
 
 export function Pill({ children, tone = "mute" }: { children: ReactNode; tone?: "mute" | "pink" }) {
   return (
-    <span className={`inline-block rounded-full px-2.5 py-0.5 text-[13px] font-medium ${tone === "pink" ? "bg-pink/15 text-pink-soft" : "text-mute shadow-[inset_0_0_0_1px_var(--line-2)]"}`}>
+    <span className={`inline-block whitespace-nowrap rounded-full px-2.5 py-0.5 text-[13px] font-medium ${tone === "pink" ? "bg-pink/15 text-pink-soft" : "text-mute shadow-[inset_0_0_0_1px_var(--line-2)]"}`}>
       {children}
     </span>
   );
 }
 
+// Dialog: centred on desktop, a sheet from the bottom on phones. Locks the page scroll and focuses the first field.
 export function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const back = document.activeElement as HTMLElement | null;
+    requestAnimationFrame(() => (box.current?.querySelector<HTMLElement>("input:not([type=hidden]),select,textarea,[data-autofocus]") ?? box.current)?.focus());
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = prev; back?.focus?.(); };
+  }, [open, onClose]);
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={onClose}>
-      <div className="w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-        <Card>
-          <div className="mb-5 flex items-center justify-between">
-            <h2 className="text-[24px] font-semibold">{title}</h2>
-            <button onClick={onClose} className="text-mute hover:text-bone text-2xl leading-none" aria-label="סגירה">×</button>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center sm:p-4 animate-fade" onClick={onClose}>
+      <div ref={box} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title}
+        className="sheet w-full outline-none sm:max-w-lg" onClick={(e) => e.stopPropagation()}>
+        <div className="bezel">
+          <div className="core max-h-[88dvh] overflow-y-auto">
+            <div className="mb-5 flex items-center justify-between gap-3">
+              <h2 className="text-[24px] font-semibold leading-tight">{title}</h2>
+              <IconButton icon="close" label="סגירה" onClick={onClose} />
+            </div>
+            {children}
           </div>
-          {children}
-        </Card>
+        </div>
       </div>
     </div>
+  );
+}
+
+// In-app confirmation in place of the browser's grey confirm() box.
+type ConfirmOpts = { title: string; body?: string; yes?: string; no?: string };
+const ConfirmCtx = createContext<(o: ConfirmOpts) => Promise<boolean>>(async () => false);
+export const useConfirm = () => useContext(ConfirmCtx);
+
+export function ConfirmProvider({ children }: { children: ReactNode }) {
+  const [ask, setAsk] = useState<(ConfirmOpts & { resolve: (v: boolean) => void }) | null>(null);
+  const confirm = useCallback((o: ConfirmOpts) => new Promise<boolean>((resolve) => setAsk({ ...o, resolve })), []);
+  const done = useCallback((v: boolean) => { setAsk((a) => { a?.resolve(v); return null; }); }, []);
+  const close = useCallback(() => done(false), [done]);
+  return (
+    <ConfirmCtx.Provider value={confirm}>
+      {children}
+      <Modal open={!!ask} onClose={close} title={ask?.title ?? ""}>
+        {ask?.body && <p className="mb-6 text-mute">{ask.body}</p>}
+        <div className="flex flex-wrap gap-3">
+          <Button data-autofocus onClick={() => done(true)}>{ask?.yes ?? "כן, למחוק"}</Button>
+          <Button variant="ghost" onClick={close}>{ask?.no ?? "ביטול"}</Button>
+        </div>
+      </Modal>
+    </ConfirmCtx.Provider>
   );
 }
 
@@ -87,8 +175,17 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="py-10 text-center text-mute">{children}</div>;
 }
 
-export function Loading() {
-  return <div className="py-10 text-center text-mute-2">טוען…</div>;
+// Skeleton: the shape of what is coming, instead of the word "loading".
+export function Loading({ rows = 4 }: { rows?: number }) {
+  return (
+    <div role="status" aria-label="טוען" className="space-y-4 py-2">
+      <div className="skeleton h-4 w-24" />
+      <div className="skeleton h-10 w-[min(420px,80%)]" />
+      <div className="bezel"><div className="core space-y-4">
+        {Array.from({ length: rows }, (_, i) => <div key={i} className="skeleton h-5" style={{ width: `${92 - i * 11}%` }} />)}
+      </div></div>
+    </div>
+  );
 }
 
 export function ErrorNote({ error }: { error: unknown }) {

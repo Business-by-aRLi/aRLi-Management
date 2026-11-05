@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type DragEvent } from "react";
 import { deleteReceipt, parseDocument, uploadReceipt, type ParsedDocument } from "../lib/data";
 import { date, money } from "../lib/format";
 import { ExpenseForm, IncomeForm } from "./forms";
+import { Segmented } from "./ui";
 
 const MAX_MB = 15;
 const isDate = (d?: string) => !!d && /^\d{4}-\d{2}-\d{2}$/.test(d);
@@ -93,12 +94,7 @@ export function DocumentUpload({ onDone }: { onDone: () => void }) {
     <div className="grid gap-4">
       {thumb}
       <Notes state={state} foreign={foreign} />
-      <div className="flex gap-1" role="tablist">
-        {([["expense", "הוצאה"], ["income", "הכנסה"]] as const).map(([k, l]) => (
-          <button key={k} type="button" role="tab" aria-selected={kind === k} onClick={() => setKind(k)}
-            className={`rounded-full px-4 py-1.5 text-[15px] font-medium ${kind === k ? "bg-[var(--ink-3)] text-bone shadow-[inset_0_0_0_1px_var(--line-2)]" : "text-mute hover:text-bone"}`}>{l}</button>
-        ))}
-      </div>
+      <Segmented label="סוג תנועה" value={kind} onChange={setKind} options={[["expense", "הוצאה"], ["income", "הכנסה"]]} />
       {kind === "expense" ? (
         <ExpenseForm key="expense" receiptPath={state.path} onDone={saved} onCancel={cancel} initial={{
           amount, description: desc, ...(isDate(p?.date) ? { spent_on: p!.date } : {}), project_id: p?.project_id ?? "",
