@@ -972,7 +972,7 @@ async function showBalance(me: Partner, chatId: number) {
     partners: { name: string; invested: number; profit_share: number; received: number }[];
   };
   const b = bal.business ?? {};
-  const lines = [`⚖️ ${bal.summary}`, ""];
+  const lines = ["⚖️ התחשבנות", ""];
   lines.push(`🏢 העסק: רווח ${fmtMoney(b.profit ?? 0)} (הכנסות ${fmtMoney(b.income ?? 0)}, הוצאות פרויקטים ${fmtMoney(b.project_expenses ?? 0)}, השקעות כלליות ${fmtMoney(b.general_expenses ?? 0)})`);
   for (const p of bal.partners) {
     lines.push(`${p.name}: השקיעה ${fmtMoney(p.invested)} · חלקה ברווח ${fmtMoney(p.profit_share)} · קיבלה ${fmtMoney(p.received)}`);
@@ -1189,8 +1189,7 @@ async function runCron() {
       const { data: exp } = await db.from("expenses").select("amount").gte("spent_on", weekAgo);
       const { data: inc } = await db.from("income").select("amount").gte("received_on", weekAgo);
       const sum = (rows: { amount: number }[] | null) => (rows ?? []).reduce((s, r) => s + Number(r.amount), 0);
-      const bal = (await runTool("get_balance", {}, { me: all[0], receiptPath: null, today: now.date })) as { summary: string };
-      await sendTo(null, `📊 סיכום שבועי\nהוצאות השבוע: ${fmtMoney(sum(exp))}\nהכנסות השבוע: ${fmtMoney(sum(inc))}\nהתחשבנות: ${bal.summary}`);
+      await sendTo(null, `📊 סיכום שבועי\nהוצאות השבוע: ${fmtMoney(sum(exp))}\nהכנסות השבוע: ${fmtMoney(sum(inc))}`);
       await db.from("app_config").upsert({ key: "weekly_summary_sent", value: now.date });
     }
   }
