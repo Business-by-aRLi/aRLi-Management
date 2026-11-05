@@ -7,6 +7,7 @@ export type Project = {
   id: string; name: string; type: string; status: string; client_id: string | null;
   agreed_price: number | null; notes: string | null; started_on: string | null; closed_on: string | null; clients?: { name: string } | null;
 };
+export type Client = { id: string; name: string; contact_name: string | null; phone: string | null; email: string | null; notes: string | null; created_at: string };
 export type Idea = { id: string; title: string; description: string | null; status: string; created_by_partner_id: string | null; created_at: string; partners?: { name: string } | null };
 export type WorkPlan = { id: string; title: string; period_start: string | null; period_end: string | null; goals: string | null };
 export type Financials = { project_id: string; name: string; type: string; status: string; income: number; expenses: number; profit: number; shares_percent_total: number };
@@ -18,7 +19,7 @@ export type Expense = {
 };
 export type Income = {
   id: string; received_on: string; amount: number; method: string | null; notes: string | null;
-  reference: string | null; receipt_path: string | null; project_id: string | null; received_by_partner_id: string | null;
+  reference: string | null; receipt_path: string | null; project_id: string | null; client_id?: string | null; received_by_partner_id: string | null;
   projects?: { name: string } | null; partners?: { name: string } | null;
 };
 export type Settlement = { id: string; settled_on: string; amount: number; from_partner_id: string; to_partner_id: string; notes: string | null };
@@ -27,7 +28,7 @@ export type Task = {
   created_at: string; completed_at: string | null; work_plan_id: string | null; project_id: string | null; assignee_partner_id: string | null; projects?: { name: string } | null; partners?: { name: string } | null;
 };
 export type Meeting = { id: string; title: string; starts_at: string; ends_at: string | null; location: string | null; projects?: { name: string } | null };
-export type TimeEntry = { id: string; work_date: string; minutes: number; kind: string; description: string | null; projects?: { name: string } | null; partners?: { name: string } | null };
+export type TimeEntry = { id: string; project_id: string | null; work_date: string; minutes: number; kind: string; description: string | null; projects?: { name: string } | null; partners?: { name: string } | null };
 export type Share = { project_id: string; partner_id: string; percent: number };
 export type RecurringCost = { id: string; name: string; amount: number; frequency: string; active: boolean; paid_by_partner_id: string | null; project_id: string | null };
 
@@ -36,6 +37,7 @@ const q = <T,>(key: unknown[], fn: () => PromiseLike<{ data: unknown; error: { m
 
 export const usePartners = () => q<Partner[]>(["partners"], () => supabase.from("partners").select("id,name,email,user_id").order("name"));
 export const useProjects = () => q<Project[]>(["projects"], () => supabase.from("projects").select("*,clients(name)").order("name"));
+export const useClients = () => q<Client[]>(["clients"], () => supabase.from("clients").select("*").order("name"));
 export const useFinancials = () => q<Financials[]>(["financials"], () => supabase.from("project_financials").select("*"));
 export type PartnerSummary = { partner_id: string; name: string; invested: number; profit_share: number; due: number; received: number; balance: number };
 export type BusinessSummary = { income: number; project_expenses: number; general_expenses: number; profit: number };

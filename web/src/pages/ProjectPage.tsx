@@ -3,8 +3,10 @@ import { Link, useParams } from "react-router-dom";
 import {
   useExpenses, useFinancials, useIncome, usePartners, useProjects, useSave, useSaveShares, useShares, useTasks, useTime,
 } from "../lib/data";
-import { date, hours, money, PROJECT_STATUS, PROJECT_TYPE, TASK_STATUS } from "../lib/format";
-import { Button, Card, Eyebrow, Field, Input, Loading, Num, Select, Textarea } from "../components/ui";
+import { date, hours, money, PROJECT_STATUS, PROJECT_TAG, TASK_STATUS } from "../lib/format";
+import { Button, Card, Field, Input, Loading, Num, Pill, Select, Tag, Textarea } from "../components/ui";
+import { ClientPicker, resolveClient, type ClientChoice } from "../components/ClientPicker";
+import type { Project } from "../lib/data";
 
 export default function ProjectPage() {
   const { id } = useParams();
@@ -23,14 +25,18 @@ export default function ProjectPage() {
   const exp = expenses.data?.filter((e) => e.project_id === id) ?? [];
   const inc = income.data?.filter((i) => i.project_id === id) ?? [];
   const tsk = tasks.data?.filter((t) => t.project_id === id && t.status !== "done") ?? [];
-  const minutes = (time.data ?? []).filter((t) => t.projects?.name === p.name).reduce((s, t) => s + t.minutes, 0);
+  const minutes = (time.data ?? []).filter((t) => t.project_id === p.id).reduce((s, t) => s + t.minutes, 0);
   const remaining = p.agreed_price != null ? Number(p.agreed_price) - Number(f?.income ?? 0) : null;
 
   return (
     <div className="space-y-10">
       <header>
         <Link to="/projects" className="text-[15px] text-mute hover:text-bone">→ פרויקטים</Link>
-        <Eyebrow>{PROJECT_TYPE[p.type]}{p.clients?.name ? ` · ${p.clients.name}` : ""}</Eyebrow>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Tag type={p.type} label={PROJECT_TAG[p.type] ?? p.type} />
+          {p.status !== "active" && <Pill>{PROJECT_STATUS[p.status]}</Pill>}
+          {p.client_id && p.clients?.name && <Link to={`/clients/${p.client_id}`} className="text-[15px] text-pink hover:text-pink-soft">{p.clients.name}</Link>}
+        </div>
         <h1 className="mt-1 text-[clamp(34px,5.2vw,80px)] font-semibold leading-[1.05] tracking-[-0.02em]">{p.name}</h1>
       </header>
 
@@ -43,7 +49,7 @@ export default function ProjectPage() {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <SplitCard projectId={p.id} profit={Number(f?.profit ?? 0)} partners={partners.data ?? []} />
-        <DetailsCard project={p} />
+        <DetailsCard key={p.id} project={p} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -120,26 +126,45 @@ function SplitCard({ projectId, profit, partners }: { projectId: string; profit:
   );
 }
 
-function DetailsCard({ project }: { project: { id: string; status: string; agreed_price: number | null; notes: string | null } }) {
+function DetailsCard({ project }: { project: Project }) {
   const save = useSave("projects");
-  const [f, setF] = useState({ status: project.status, agreed_price: project.agreed_price?.toString() ?? "", notes: project.notes ?? "" });
+  const [f, setF] = useState({
+    name: project.name, type: project.type, status: project.status,
+    agreed_price: project.agreed_price?.toString() ?? "", notes: project.notes ?? "",
+  });
+  const [client, setClient] = useState<ClientChoice>({ id: project.client_id ?? "", newName: "" });
+  const [error, setError] = useState("");
   return (
     <Card>
       <h2 className="mb-5 text-[22px] font-semibold">פרטים</h2>
-      <form className="grid gap-4 sm:grid-cols-2" onSubmit={(e) => {
+      <form className="grid gap-4 sm:grid-cols-2" onSubmit={async (e) => {
         e.preventDefault();
-        save.mutate({ id: project.id, values: {
-          status: f.status, agreed_price: f.agreed_price ? Number(f.agreed_price) : null, notes: f.notes || null,
-          ...(f.status === "closed" && project.status !== "closed" ? { closed_on: new Date().toISOString().slice(0, 10) } : {}),
-        } });
+        setError("");
+        try {
+          const client_id = await resolveClient(client);
+          await save.mutateAsync({ id: project.id, values: {
+            name: f.name.trim(), type: f.type, client_id, status: f.status,
+            agreed_price: f.agreed_price ? Number(f.agreed_price) : null, notes: f.notes || null,
+            ...(f.status === "closed" && project.status !== "closed" ? { closed_on: new Date().toISOString().slice(0, 10) } : {}),
+          } });
+          if (client.id === "new") setClient({ id: client_id ?? "", newName: "" });
+        } catch (err) { setError((err as Error).message); }
       }}>
+        <div className="sm:col-span-2"><Field label="שם"><Input required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field></div>
+        <Field label="תגית">
+          <Select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })}>
+            {Object.entries(PROJECT_TAG).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </Select>
+        </Field>
+        <Field label="לקוח"><ClientPicker value={client} onChange={setClient} /></Field>
         <Field label="סטטוס">
           <Select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>
             {Object.entries(PROJECT_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </Select>
         </Field>
-        <Field label="מחיר מוסכם (₪)"><Input type="number" value={f.agreed_price} onChange={(e) => setF({ ...f, agreed_price: e.target.value })} /></Field>
+        <Field label="מחיר מוסכם (₪)"><Input type="number" inputMode="decimal" value={f.agreed_price} onChange={(e) => setF({ ...f, agreed_price: e.target.value })} /></Field>
         <div className="sm:col-span-2"><Field label="הערות"><Textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></Field></div>
+        {error && <p className="sm:col-span-2 text-[14px] text-error">{error}</p>}
         <div className="sm:col-span-2"><Button variant="ghost" disabled={save.isPending}>{save.isSuccess ? "נשמר" : "שמירה"}</Button></div>
       </form>
     </Card>
