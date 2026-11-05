@@ -3,6 +3,7 @@
 //   POST (from Telegram, with secret header)  -> handle a message
 //   GET  ?action=setup                         -> register the webhook and commands
 //   POST ?action=cron (x-cron-secret header)   -> send due reminders
+//   GET  .../telegram-bot/gmail/callback       -> Google sign-in redirect (connects a partner's Gmail)
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
@@ -13,6 +14,10 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const db = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const TZ = "Asia/Jerusalem";
 const TG = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const BOT_USERNAME = Deno.env.get("TELEGRAM_BOT_USERNAME") ?? "aRLi_Management_bot";
+const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID");
+const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET");
+const GMAIL_REDIRECT_URI = `${SUPABASE_URL}/functions/v1/telegram-bot/gmail/callback`;
 
 type Partner = { id: string; name: string; telegram_chat_id: number | null };
 
@@ -111,7 +116,10 @@ const toolDeclarations = [
         paid_by: PARTNER,
         category: S("string", "קטגוריה, למשל תוכנה, ציוד, נסיעות, פרסום"),
         reference: S("string", "מספר חשבונית או אסמכתה"),
+        notes: S("string", "הערה, למשל הסכום המקורי במטבע זר"),
         attach_receipt: S("boolean", "לצרף את הקובץ שנשלח בהודעה הזו כקבלה"),
+        gmail_message_id: S("string", "כשההוצאה היא חשבונית מ-Gmail: message_id מתוך read_gmail_invoice"),
+        receipt_path: S("string", "כשההוצאה היא חשבונית מ-Gmail: receipt_path מתוך read_gmail_invoice"),
       },
       required: ["amount", "description"],
     }),
@@ -248,6 +256,38 @@ const toolDeclarations = [
     parameters: S("object", undefined, { properties: { from: S("string"), to: S("string"), partner: PARTNER } }),
   },
   {
+    name: "connect_gmail",
+    description: "שולח לשותפה קישור לחיבור תיבת ה-Gmail שלה לבוט (קריאה בלבד). להשתמש כשהיא מבקשת לחבר, או כשכלי Gmail מחזיר שאין חיבור.",
+    parameters: S("object", undefined, { properties: {} }),
+  },
+  {
+    name: "disconnect_gmail",
+    description: "ניתוק תיבת ה-Gmail של השותפה מהבוט ומחיקת ההרשאה.",
+    parameters: S("object", undefined, { properties: {} }),
+  },
+  {
+    name: "search_gmail_invoices",
+    description: "חיפוש מיילים בתיבת ה-Gmail של השותפה שכותבת, לפי תחביר החיפוש של Gmail. מחזיר רשימת מיילים עם קבצים מצורפים, ומסמן מה כבר נרשם במערכת.",
+    parameters: S("object", undefined, {
+      properties: {
+        query: S("string", "שאילתת Gmail, למשל: from:vercel after:2026/10/01 before:2026/11/01 (invoice OR receipt OR חשבונית OR קבלה)"),
+        max_results: S("integer", "עד 20, ברירת מחדל 10"),
+      },
+      required: ["query"],
+    }),
+  },
+  {
+    name: "read_gmail_invoice",
+    description: "קורא מייל אחד מתוך search_gmail_invoices: שומר את החשבונית המצורפת כקבלה ומחלץ ממנה ספק, סכום, מטבע, תאריך ומספר חשבונית. לא רושם כלום במערכת.",
+    parameters: S("object", undefined, {
+      properties: {
+        message_id: S("string"),
+        attachment_name: S("string", "אם יש כמה קבצים מצורפים, איזה מהם לקרוא"),
+      },
+      required: ["message_id"],
+    }),
+  },
+  {
     name: "delete_record",
     description: "מחיקת רשומה שנרשמה בטעות. רק אחרי שהשותפה אישרה במפורש.",
     parameters: S("object", undefined, {
@@ -269,16 +309,64 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
     case "add_expense": {
       const project = await projectByName(a.project_name);
       const payer = (await partnerByName(a.paid_by)) ?? me;
+      if (a.gmail_message_id) {
+        const dup = check(await db.from("expenses").select("id,spent_on,amount").eq("gmail_message_id", a.gmail_message_id).maybeSingle());
+        if (dup) return { ok: false, error: "החשבונית מהמייל הזה כבר רשומה", existing: dup };
+      }
+      const receiptPath = typeof a.receipt_path === "string" && a.receipt_path.startsWith("gmail/")
+        ? a.receipt_path
+        : (a.attach_receipt !== false ? ctx.receiptPath : null);
       const row = check(await db.from("expenses").insert({
         amount: a.amount, description: a.description, spent_on: a.spent_on ?? ctx.today,
         project_id: project?.id ?? null, paid_by_partner_id: payer.id, category: a.category ?? null,
-        reference: a.reference ?? null,
-        receipt_path: a.attach_receipt !== false ? ctx.receiptPath : null,
+        reference: a.reference ?? null, notes: a.notes ?? null,
+        receipt_path: receiptPath, gmail_message_id: a.gmail_message_id ?? null,
       }).select("id").single());
       await notifyOthers(me, `💸 ${me.name} רשמה הוצאה: ${fmtMoney(a.amount)} על ${a.description}` +
         `${project ? ` (${project.name})` : ""}, שולם על ידי ${payer.name}.`);
-      return { ok: true, id: row.id, project: project?.name ?? "כללי לעסק", paid_by: payer.name, receipt_saved: !!(a.attach_receipt !== false && ctx.receiptPath) };
+      return { ok: true, id: row.id, project: project?.name ?? "כללי לעסק", paid_by: payer.name, receipt_saved: !!receiptPath };
     }
+    case "connect_gmail": {
+      if (!me.telegram_chat_id) throw new Error("אין צ'אט מחובר");
+      const link = await gmailAuthUrl(me);
+      await tg("sendMessage", {
+        chat_id: me.telegram_chat_id,
+        text: "כדי לחבר את ה-Gmail שלך, לחצי על הכפתור ואשרי גישת קריאה. הקישור תקף ל-15 דקות.\n" +
+          "אם Google מציגה \"האפליקציה לא אומתה\", לחצי על \"מתקדם\" ואז \"מעבר אל aRLi\". זה תקין, זה הכלי הפנימי שלכן.",
+        reply_markup: { inline_keyboard: [[{ text: "🔗 חיבור Gmail", url: link }]] },
+      });
+      return { ok: true, note: "הכפתור נשלח בהודעה נפרדת. אל תכתבי את הקישור בעצמך." };
+    }
+    case "disconnect_gmail": {
+      const { data: acc } = await db.from("gmail_accounts").select("refresh_token").eq("partner_id", me.id).maybeSingle();
+      if (!acc) return { ok: true, note: "לא היה חיבור" };
+      await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(acc.refresh_token)}`, { method: "POST" }).catch(() => {});
+      check(await db.from("gmail_accounts").delete().eq("partner_id", me.id));
+      return { ok: true };
+    }
+    case "search_gmail_invoices": {
+      const max = Math.min(Math.max(Number(a.max_results) || 10, 1), 20);
+      // deno-lint-ignore no-explicit-any
+      const list: any = await gmailApi(me.id, "messages", { q: a.query, maxResults: String(max) });
+      const ids: string[] = (list.messages ?? []).map((m: { id: string }) => m.id);
+      if (!ids.length) return { messages: [], note: "לא נמצאו מיילים. אפשר לנסות שאילתה רחבה יותר." };
+      const recorded = check(await db.from("expenses").select("gmail_message_id").in("gmail_message_id", ids)) as { gmail_message_id: string }[];
+      const done = new Set(recorded.map((r) => r.gmail_message_id));
+      const messages = await Promise.all(ids.map(async (id) => {
+        // deno-lint-ignore no-explicit-any
+        const m: any = await gmailApi(me.id, `messages/${id}`, { format: "full" });
+        const h = headers(m);
+        return {
+          message_id: id, date: h.date, from: h.from, subject: h.subject,
+          snippet: (m.snippet ?? "").slice(0, 160),
+          attachments: collectParts(m.payload).attachments.map((p) => p.filename),
+          already_recorded: done.has(id),
+        };
+      }));
+      return { messages };
+    }
+    case "read_gmail_invoice":
+      return await readGmailInvoice(me, a.message_id, a.attachment_name);
     case "add_income": {
       const project = await projectByName(a.project_name);
       const receiver = (await partnerByName(a.received_by)) ?? me;
@@ -443,6 +531,214 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
   throw new Error(`כלי לא מוכר: ${name}`);
 }
 
+// ---------- Gmail ----------
+async function gmailAuthUrl(me: Partner): Promise<string> {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    throw new Error("החיבור ל-Gmail עוד לא הוגדר: חסרים GOOGLE_CLIENT_ID ו-GOOGLE_CLIENT_SECRET בסיקרטים של Supabase.");
+  }
+  await db.from("gmail_oauth_states").delete().lt("created_at", new Date(Date.now() - 15 * 60e3).toISOString());
+  const state = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
+  check(await db.from("gmail_oauth_states").insert({ state, partner_id: me.id }));
+  const params = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID, redirect_uri: GMAIL_REDIRECT_URI, response_type: "code",
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
+    access_type: "offline", prompt: "consent", state,
+  });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+}
+
+const plain = (text: string, status = 200) =>
+  new Response(text, { status, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+
+async function gmailCallback(url: URL): Promise<Response> {
+  const state = url.searchParams.get("state");
+  const code = url.searchParams.get("code");
+  if (!state) return plain("missing state", 400);
+  const { data: st } = await db.from("gmail_oauth_states").delete().eq("state", state)
+    .select("partner_id,created_at").maybeSingle();
+  if (!st || Date.now() - new Date(st.created_at).getTime() > 15 * 60e3) {
+    return plain("הקישור פג תוקף. בקשי מהבוט קישור חדש.", 400);
+  }
+  const partner = (await partners()).find((p) => p.id === st.partner_id);
+  const tell = async (text: string) => { if (partner?.telegram_chat_id) await send(partner.telegram_chat_id, text); };
+  const backToBot = Response.redirect(`https://t.me/${BOT_USERNAME}`, 302);
+  if (!code) {
+    await tell("החיבור ל-Gmail בוטל. אפשר לנסות שוב מתי שתרצי.");
+    return backToBot;
+  }
+  const tok = await (await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code, client_id: GOOGLE_CLIENT_ID!, client_secret: GOOGLE_CLIENT_SECRET!,
+      redirect_uri: GMAIL_REDIRECT_URI, grant_type: "authorization_code",
+    }),
+  })).json();
+  if (!tok.refresh_token) {
+    console.error("gmail token exchange failed", tok.error, tok.error_description);
+    await tell("לא הצלחתי להשלים את החיבור ל-Gmail. נסי שוב, ואם זה חוזר ספרי לי.");
+    return backToBot;
+  }
+  const profile = await (await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile", {
+    headers: { Authorization: `Bearer ${tok.access_token}` },
+  })).json();
+  check(await db.from("gmail_accounts").upsert({
+    partner_id: st.partner_id, email: profile.emailAddress ?? "", refresh_token: tok.refresh_token,
+    connected_at: new Date().toISOString(),
+  }));
+  await tell(`✅ חיברתי את ה-Gmail שלך (${profile.emailAddress ?? ""}), בהרשאת קריאה בלבד.\n` +
+    `עכשיו אפשר לבקש למשל: "תמצאי את החשבוניות של Vercel מאוקטובר ותרשמי אותן".`);
+  return backToBot;
+}
+
+const gmailTokens = new Map<string, { token: string; exp: number }>();
+
+async function gmailToken(partnerId: string): Promise<string> {
+  const cached = gmailTokens.get(partnerId);
+  if (cached && cached.exp > Date.now()) return cached.token;
+  const { data: acc } = await db.from("gmail_accounts").select("refresh_token").eq("partner_id", partnerId).maybeSingle();
+  if (!acc) throw new Error("ה-Gmail של השותפה עוד לא מחובר. אפשר לחבר עם connect_gmail.");
+  const tok = await (await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      refresh_token: acc.refresh_token, client_id: GOOGLE_CLIENT_ID ?? "", client_secret: GOOGLE_CLIENT_SECRET ?? "",
+      grant_type: "refresh_token",
+    }),
+  })).json();
+  if (!tok.access_token) {
+    if (tok.error === "invalid_grant") {
+      await db.from("gmail_accounts").delete().eq("partner_id", partnerId);
+      throw new Error("ההרשאה ל-Gmail פגה או בוטלה. צריך לחבר מחדש עם connect_gmail.");
+    }
+    throw new Error(`שגיאה בחיבור ל-Gmail: ${tok.error ?? "unknown"}`);
+  }
+  gmailTokens.set(partnerId, { token: tok.access_token, exp: Date.now() + (Number(tok.expires_in ?? 3600) - 60) * 1000 });
+  return tok.access_token;
+}
+
+async function gmailApi(partnerId: string, path: string, params: Record<string, string> = {}): Promise<unknown> {
+  const token = await gmailToken(partnerId);
+  const r = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/${path}?${new URLSearchParams(params)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!r.ok) throw new Error(`Gmail ${r.status}: ${(await r.text()).slice(0, 300)}`);
+  return r.json();
+}
+
+function fromB64Url(data: string): Uint8Array {
+  const bin = atob(data.replace(/-/g, "+").replace(/_/g, "/"));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// deno-lint-ignore no-explicit-any
+function headers(m: any) {
+  const list: { name: string; value: string }[] = m.payload?.headers ?? [];
+  const get = (n: string) => list.find((h) => h.name.toLowerCase() === n)?.value ?? "";
+  return { from: get("from"), subject: get("subject"), date: get("date") };
+}
+
+type MailPart = { filename: string; mimeType: string; body: { data?: string; attachmentId?: string; size?: number } };
+
+// deno-lint-ignore no-explicit-any
+function collectParts(payload: any) {
+  const attachments: MailPart[] = [], texts: MailPart[] = [], htmls: MailPart[] = [];
+  const walk = (p: MailPart & { parts?: MailPart[] }) => {
+    if (!p) return;
+    const isDoc = /^(application\/pdf|image\/)/.test(p.mimeType ?? "") || /\.(pdf|png|jpe?g|webp|heic)$/i.test(p.filename ?? "");
+    if (p.filename && isDoc && (p.body?.attachmentId || p.body?.data)) attachments.push(p);
+    else if (p.mimeType === "text/plain" && p.body?.data) texts.push(p);
+    else if (p.mimeType === "text/html" && p.body?.data) htmls.push(p);
+    for (const c of p.parts ?? []) walk(c as MailPart & { parts?: MailPart[] });
+  };
+  walk(payload);
+  return { attachments, texts, htmls };
+}
+
+function mimeOf(p: MailPart): string {
+  if (/^(application\/pdf|image\/)/.test(p.mimeType)) return p.mimeType;
+  if (/\.pdf$/i.test(p.filename)) return "application/pdf";
+  if (/\.png$/i.test(p.filename)) return "image/png";
+  if (/\.webp$/i.test(p.filename)) return "image/webp";
+  return "image/jpeg";
+}
+
+const invoiceSchema = S("object", undefined, {
+  properties: {
+    is_invoice: S("boolean", "האם זו באמת חשבונית, קבלה או אישור תשלום"),
+    vendor: S("string", "שם הספק"),
+    amount: S("number", "הסכום הכולל לתשלום, כולל מע\"מ"),
+    currency: S("string", "קוד מטבע: ILS, USD, EUR וכו'"),
+    date: S("string", "תאריך החשבונית YYYY-MM-DD"),
+    invoice_number: S("string"),
+    description: S("string", "על מה החיוב, בקצרה ובעברית"),
+  },
+  required: ["is_invoice"],
+});
+
+async function readGmailInvoice(me: Partner, messageId: string, attachmentName?: string) {
+  // deno-lint-ignore no-explicit-any
+  const m: any = await gmailApi(me.id, `messages/${messageId}`, { format: "full" });
+  const h = headers(m);
+  const { attachments, texts, htmls } = collectParts(m.payload);
+  const dup = check(await db.from("expenses").select("id,spent_on,amount").eq("gmail_message_id", messageId).maybeSingle());
+  const month = new Date(Number(m.internalDate) || Date.now()).toISOString().slice(0, 7);
+
+  // deno-lint-ignore no-explicit-any
+  const parts: any[] = [];
+  let receiptPath: string | null = null;
+  let source = "";
+  const att = (attachmentName && attachments.find((p) => p.filename.includes(attachmentName))) ||
+    attachments.find((p) => mimeOf(p) === "application/pdf") || attachments[0];
+
+  if (att) {
+    const data = att.body.data ??
+      // deno-lint-ignore no-explicit-any
+      ((await gmailApi(me.id, `messages/${messageId}/attachments/${att.body.attachmentId}`)) as any).data;
+    const bytes = fromB64Url(data);
+    if (bytes.length > 15 * 1024 * 1024) throw new Error("הקובץ המצורף גדול מדי לקריאה (מעל 15MB).");
+    const mime = mimeOf(att);
+    const safe = att.filename.replace(/[^\w.\-]+/g, "_").slice(-80) || "invoice";
+    const path = `gmail/${month}/${messageId}-${safe}`;
+    const up = await db.storage.from("receipts").upload(path, bytes, { contentType: mime, upsert: true });
+    if (!up.error) receiptPath = path;
+    parts.push({ inlineData: { mimeType: mime, data: b64(bytes) } });
+    source = `attachment: ${att.filename}`;
+  } else {
+    // No attached file: many receipts arrive as the email body itself.
+    const html = htmls[0] ? new TextDecoder().decode(fromB64Url(htmls[0].body.data!)) : "";
+    const txt = texts[0] ? new TextDecoder().decode(fromB64Url(texts[0].body.data!)) : "";
+    const body = (txt || html.replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " "))
+      .replace(/\s+/g, " ").trim().slice(0, 20000);
+    if (!body) throw new Error("במייל הזה אין קובץ מצורף ואין טקסט לקריאה.");
+    const path = `gmail/${month}/${messageId}.html`;
+    const file = html || `<pre>${txt.replace(/</g, "&lt;")}</pre>`;
+    const up = await db.storage.from("receipts").upload(path, new TextEncoder().encode(file), { contentType: "text/html", upsert: true });
+    if (!up.error) receiptPath = path;
+    parts.push({ text: `גוף המייל:\n${body}` });
+    source = "email body";
+  }
+  parts.push({ text: `מייל מ: ${h.from}\nנושא: ${h.subject}\nתאריך: ${h.date}\nחלצי את פרטי החשבונית.` });
+
+  const res = await gemini({
+    contents: [{ role: "user", parts }],
+    generationConfig: { responseMimeType: "application/json", responseSchema: invoiceSchema },
+  });
+  // deno-lint-ignore no-explicit-any
+  const raw = (res.candidates?.[0]?.content?.parts ?? []).filter((p: any) => p.text && !p.thought).map((p: any) => p.text).join("");
+  let extracted: unknown = null;
+  try { extracted = JSON.parse(raw); } catch { extracted = { error: "לא הצלחתי לחלץ את הפרטים", raw: raw.slice(0, 500) }; }
+
+  return {
+    message_id: messageId, from: h.from, subject: h.subject, email_date: h.date, source,
+    other_attachments: attachments.filter((p) => p !== att).map((p) => p.filename),
+    receipt_path: receiptPath, extracted,
+    already_recorded: dup ?? false,
+  };
+}
+
 // ---------- Gemini ----------
 function systemPrompt(me: Partner) {
   const now = israelNow();
@@ -455,6 +751,8 @@ function systemPrompt(me: Partner) {
 - עונה על שאלות לגבי המאזן, פרויקטים, הוצאות, משימות ולו"ז, תמיד מתוך הכלים ולא מהזיכרון.
 - כשמגיע צילום של חשבונית או קבלה: קראי את הסכום, התאריך, שם הספק ומספר החשבונית, ורשמי אותה כהוצאה עם attach_receipt=true. אם לא ברור לאיזה פרויקט היא שייכת, שאלי. אם שום דבר לא ברור, שאלי לפני שאת רושמת.
 - כשמגיעה הודעה קולית: הביני מה נאמר ופעלי לפי זה, ובתשובה כתבי בקצרה מה הבנת.
+- חשבוניות מ-Gmail: כשמבקשים למצוא חשבוניות במייל, חפשי עם search_gmail_invoices (בנו שאילתת Gmail עם ספק, טווח תאריכים after:/before: בפורמט YYYY/MM/DD, ומילים כמו invoice, receipt, חשבונית, קבלה). קראי כל מייל רלוונטי שעוד לא נרשם עם read_gmail_invoice. אחר כך הציגי רשימה קצרה: ספק, תאריך, סכום ומטבע, ופרויקט משוער. רשמי עם add_expense רק אחרי שהשותפה אישרה, ותמיד העבירי gmail_message_id ו-receipt_path. אם הסכום לא בשקלים, שאלי מה הסכום בשקלים (למשל מהחיוב בכרטיס), ורשמי את הסכום המקורי ב-notes. אם הכלי אומר שה-Gmail לא מחובר, הפעילי connect_gmail.
+- ההיסטוריה עשויה לכלול שורות "[מידע פנימי: ...]" עם תוצאות כלים מתורות קודמות. השתמשי בהן (למשל ב-message_id וב-receipt_path), אבל לעולם אל תכתבי אותן בתשובה.
 
 כללים:
 - הבעלות על הכסף: אין לעסק חשבון בנק. כל הוצאה שולמה מהחשבון הפרטי של אחת השותפות, וכל הכנסה התקבלה אצל אחת מהן.
@@ -490,7 +788,8 @@ async function converse(me: Partner, chatId: number, userParts: any[], userText:
   contents.push({ role: "user", parts: userParts });
 
   let answer = "";
-  for (let step = 0; step < 8; step++) {
+  const toolLog: string[] = [];
+  for (let step = 0; step < 10; step++) {
     const res = await gemini({
       systemInstruction: { parts: [{ text: systemPrompt(me) }] },
       contents,
@@ -516,6 +815,7 @@ async function converse(me: Partner, chatId: number, userParts: any[], userText:
         result = { error: (e as Error).message };
       }
       responses.push({ functionResponse: { name: c.functionCall.name, response: { result } } });
+      toolLog.push(`${c.functionCall.name}: ${JSON.stringify(result).slice(0, 1500)}`);
     }
     contents.push({ role: "user", parts: responses });
   }
@@ -523,7 +823,10 @@ async function converse(me: Partner, chatId: number, userParts: any[], userText:
 
   await db.from("bot_messages").insert([
     { chat_id: chatId, role: "user", content: userText },
-    { chat_id: chatId, role: "model", content: answer },
+    {
+      chat_id: chatId, role: "model",
+      content: toolLog.length ? `${answer}\n\n[מידע פנימי: ${toolLog.join(" | ").slice(0, 8000)}]` : answer,
+    },
   ]);
   return answer;
 }
@@ -661,6 +964,8 @@ async function runCron() {
 Deno.serve(async (req) => {
   const url = new URL(req.url);
   const action = url.searchParams.get("action");
+
+  if (url.pathname.endsWith("/gmail/callback")) return await gmailCallback(url);
 
   if (action === "setup") {
     const hook = await tg("setWebhook", {
