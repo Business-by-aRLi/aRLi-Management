@@ -219,8 +219,8 @@ export function BalanceModule() {
             <Line label="חלקה ברווח" value={r.profit_share} />
             <Line label="קיבלה" value={r.received} />
             <div className="mt-2 flex justify-between border-t border-[var(--line)] pt-2">
-              <span className="text-mute">{r.balance > 0.005 ? "עוד מגיע לה" : r.balance < -0.005 ? "קיבלה מעבר לחלקה" : "מאוזנת"}</span>
-              <Num className={r.balance > 0.005 ? "text-pink" : ""}>{money(Math.abs(r.balance))}</Num>
+              <span className="text-mute">סה״כ יתרה</span>
+              <Num className="font-medium">{money(Math.abs(r.balance) < 0.005 ? 0 : r.balance)}</Num>
             </div>
           </div>
         ))}
