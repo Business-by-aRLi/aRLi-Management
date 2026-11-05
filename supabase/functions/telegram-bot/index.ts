@@ -860,7 +860,7 @@ const COMMANDS = [
   { command: "menu", description: "תפריט כפתורים ראשי" },
   { command: "today", description: "מה יש לי היום" },
   { command: "tasks", description: "המשימות הפתוחות שלי" },
-  { command: "balance", description: "המאזן בינינו" },
+  { command: "balance", description: "ההתחשבנות בינינו" },
   { command: "expense", description: "הוצאה חדשה" },
   { command: "income", description: "הכנסה חדשה" },
   { command: "meeting", description: "פגישה חדשה" },
@@ -872,11 +872,11 @@ const COMMANDS = [
 
 // Bottom keyboard: each label maps to a command.
 const KEY_LABELS: Record<string, string> = {
-  "📅 היום": "today", "📋 משימות": "tasks", "⚖️ מאזן": "balance",
+  "📅 היום": "today", "📋 משימות": "tasks", "⚖️ התחשבנות": "balance", "⚖️ מאזן": "balance",
   "💸 הוצאה": "expense", "🗓 פגישה": "meeting", "⏱ שעות": "time",
 };
 const MAIN_KEYBOARD = {
-  keyboard: [["📅 היום", "📋 משימות", "⚖️ מאזן"], ["💸 הוצאה", "🗓 פגישה", "⏱ שעות"]].map((row) => row.map((text) => ({ text }))),
+  keyboard: [["📅 היום", "📋 משימות", "⚖️ התחשבנות"], ["💸 הוצאה", "🗓 פגישה", "⏱ שעות"]].map((row) => row.map((text) => ({ text }))),
   resize_keyboard: true,
   is_persistent: true,
   input_field_placeholder: "כתבי, הקליטי או שלחי חשבונית",
@@ -965,10 +965,19 @@ async function showTasks(me: Partner, chatId: number) {
 }
 
 async function showBalance(me: Partner, chatId: number) {
-  const bal = (await runTool("get_balance", {}, { me, receiptPath: null, today: israelNow().date })) as
-    { summary: string; partners: { name: string; entitled: number; held: number }[] };
-  const lines = bal.partners.map((p) => `${p.name}: זכאית ל-${fmtMoney(p.entitled)}, מחזיקה ${fmtMoney(p.held)}`);
-  await send(chatId, `⚖️ ${bal.summary}\n\n${lines.join("\n")}`);
+  const bal = (await runTool("get_balance", {}, { me, receiptPath: null, today: israelNow().date })) as {
+    summary: string;
+    // deno-lint-ignore no-explicit-any
+    business: any;
+    partners: { name: string; invested: number; profit_share: number; received: number }[];
+  };
+  const b = bal.business ?? {};
+  const lines = [`⚖️ ${bal.summary}`, ""];
+  lines.push(`🏢 העסק: רווח ${fmtMoney(b.profit ?? 0)} (הכנסות ${fmtMoney(b.income ?? 0)}, הוצאות פרויקטים ${fmtMoney(b.project_expenses ?? 0)}, השקעות כלליות ${fmtMoney(b.general_expenses ?? 0)})`);
+  for (const p of bal.partners) {
+    lines.push(`${p.name}: השקיעה ${fmtMoney(p.invested)} · חלקה ברווח ${fmtMoney(p.profit_share)} · קיבלה ${fmtMoney(p.received)}`);
+  }
+  await send(chatId, lines.join("\n"));
 }
 
 // Returns true when the text was a command or a keyboard button and has been handled.
