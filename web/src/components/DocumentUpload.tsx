@@ -59,7 +59,6 @@ export function DocumentUpload({ onDone }: { onDone: () => void }) {
         <button type="button" onClick={() => input.current?.click()}
           onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={onDrop}
           className={`grid w-full cursor-pointer place-items-center gap-2 rounded-[1.25rem] border border-dashed px-6 py-12 text-center transition-colors duration-300 ${drag ? "border-pink bg-pink/10" : "border-[var(--line-2)] hover:bg-[var(--hover-veil)]"}`}>
-          <span className="text-[34px] leading-none" aria-hidden>📄</span>
           <span className="text-[18px] font-semibold">גררי לכאן חשבונית או קבלה</span>
           <span className="text-[15px] text-mute">או לחצי לבחירת קובץ. תמונה או PDF, עד {MAX_MB}MB</span>
         </button>
@@ -138,7 +137,7 @@ function Notes({ state, foreign }: { state: Extract<State, { step: "review" }>; 
   if (foreign) lines.push(`הסכום במסמך הוא ${foreign}. כתבי כמה זה יצא בשקלים (למשל מהחיוב בכרטיס).`);
   if (p?.note) lines.push(p.note);
   p?.duplicates.forEach((d) => lines.push(`ייתכן שזה כבר נרשם: ${d.table === "income" ? "הכנסה" : "הוצאה"} של ${money(d.amount)} מ-${date(d.date)}.`));
-  if (!lines.length) return <p className="text-[15px] text-pink-soft">קראתי את המסמך ✓ בדקי שהכול נכון ושמרי.</p>;
+  if (!lines.length) return <p className="text-[15px] text-pink-soft">קראתי את המסמך. בדקי שהכול נכון ושמרי.</p>;
   return (
     <ul className="grid gap-1 rounded-2xl bg-pink/10 px-4 py-3 text-[14px]">
       {lines.map((l, i) => <li key={i}>{l}</li>)}
