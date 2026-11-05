@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
-import { uploadReceipt, usePartners, useProjects, useSave, type Expense, type Income, type Task, type Meeting } from "../lib/data";
+import { uploadReceipt, usePartners, useProjects, useSave, useWorkPlans, type Expense, type Income, type Task, type Meeting } from "../lib/data";
 import { Button, Field, Input, Select, Textarea } from "./ui";
 
 // The partner who is signed in, used as the default payer/receiver/assignee.
@@ -147,11 +147,13 @@ export function SettlementForm({ from, to, amount, onDone }: { from?: string; to
   );
 }
 
-export function TaskForm({ row, projectId, onDone }: { row?: Task; projectId?: string; onDone: () => void }) {
+export function TaskForm({ row, projectId, startOn, onDone }: { row?: Task; projectId?: string; startOn?: string; onDone: () => void }) {
   const save = useSave("tasks");
+  const plans = useWorkPlans();
   const [f, setF] = useState({
     title: row?.title ?? "", description: row?.description ?? "", project_id: row?.project_id ?? projectId ?? "",
     assignee_partner_id: row?.assignee_partner_id ?? "", due_on: row?.due_on ?? "", priority: String(row?.priority ?? 2),
+    start_on: row?.start_on ?? startOn ?? "", work_plan_id: row?.work_plan_id ?? "",
   });
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
   async function submit(e: FormEvent) {
@@ -161,6 +163,7 @@ export function TaskForm({ row, projectId, onDone }: { row?: Task; projectId?: s
       values: {
         title: f.title, description: nullIfEmpty(f.description), project_id: nullIfEmpty(f.project_id),
         assignee_partner_id: nullIfEmpty(f.assignee_partner_id), due_on: nullIfEmpty(f.due_on), priority: Number(f.priority),
+        start_on: nullIfEmpty(f.start_on), work_plan_id: nullIfEmpty(f.work_plan_id),
         ...(row && f.due_on !== row.due_on ? { reminded_on: null } : {}),
       },
     });
@@ -171,7 +174,14 @@ export function TaskForm({ row, projectId, onDone }: { row?: Task; projectId?: s
       <div className="sm:col-span-2"><Field label="משימה"><Input required value={f.title} onChange={(e) => set("title")(e.target.value)} /></Field></div>
       <Field label="פרויקט"><ProjectSelect value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" /></Field>
       <Field label="אחראית"><PartnerSelect value={f.assignee_partner_id} onChange={set("assignee_partner_id")} allowNone="שתינו" /></Field>
+      <Field label="מתחילה"><Input type="date" value={f.start_on} onChange={(e) => set("start_on")(e.target.value)} /></Field>
       <Field label="דדליין"><Input type="date" value={f.due_on} onChange={(e) => set("due_on")(e.target.value)} /></Field>
+      <Field label="שייכת ליעד">
+        <Select value={f.work_plan_id} onChange={(e) => set("work_plan_id")(e.target.value)}>
+          <option value="">בלי יעד</option>
+          {plans.data?.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+        </Select>
+      </Field>
       <Field label="עדיפות">
         <Select value={f.priority} onChange={(e) => set("priority")(e.target.value)}>
           <option value="1">גבוהה</option><option value="2">רגילה</option><option value="3">נמוכה</option>
@@ -245,6 +255,30 @@ export function TimeForm({ onDone }: { onDone: () => void }) {
       </Field>
       <Field label="מי"><PartnerSelect value={f.partner_id} onChange={set("partner_id")} /></Field>
       <Field label="מה עשיתי"><Input value={f.description} onChange={(e) => set("description")(e.target.value)} /></Field>
+      <div className="sm:col-span-2"><Actions pending={save.isPending} error={save.error} onCancel={onDone} /></div>
+    </form>
+  );
+}
+
+export function PlanForm({ row, onDone }: { row?: { id: string; title: string; period_start: string | null; period_end: string | null; goals: string | null }; onDone: () => void }) {
+  const save = useSave("work_plans");
+  const now = new Date();
+  const qStart = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
+  const qEnd = new Date(qStart.getFullYear(), qStart.getMonth() + 3, 0);
+  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const [f, setF] = useState({
+    title: row?.title ?? "", period_start: row?.period_start ?? iso(qStart), period_end: row?.period_end ?? iso(qEnd), goals: row?.goals ?? "",
+  });
+  return (
+    <form className="grid gap-4 sm:grid-cols-2" onSubmit={async (e) => {
+      e.preventDefault();
+      await save.mutateAsync({ id: row?.id, values: { ...f, goals: nullIfEmpty(f.goals) } });
+      onDone();
+    }}>
+      <div className="sm:col-span-2"><Field label="היעד"><Input required value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} placeholder="למשל: 3 לקוחות חדשים עד סוף הרבעון" /></Field></div>
+      <Field label="מ־"><Input type="date" value={f.period_start} onChange={(e) => setF({ ...f, period_start: e.target.value })} /></Field>
+      <Field label="עד"><Input type="date" value={f.period_end} onChange={(e) => setF({ ...f, period_end: e.target.value })} /></Field>
+      <div className="sm:col-span-2"><Field label="למה זה חשוב, ואיך נדע שהצלחנו"><Textarea value={f.goals} onChange={(e) => setF({ ...f, goals: e.target.value })} /></Field></div>
       <div className="sm:col-span-2"><Actions pending={save.isPending} error={save.error} onCancel={onDone} /></div>
     </form>
   );

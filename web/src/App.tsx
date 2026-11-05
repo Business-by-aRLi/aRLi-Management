@@ -5,6 +5,7 @@ import { supabase } from "./lib/supabase";
 import { usePartners } from "./lib/data";
 import { Loading } from "./components/ui";
 import Login from "./pages/Login";
+import TwoFactor from "./pages/TwoFactor";
 import Dashboard from "./pages/Dashboard";
 import Money from "./pages/Money";
 import Projects from "./pages/Projects";
@@ -14,21 +15,32 @@ import Tasks from "./pages/Tasks";
 import CalendarPage from "./pages/Calendar";
 
 const LINKS = [
-  ["/", "ראשי"], ["/money", "כספים"], ["/projects", "פרויקטים"],
+  ["/", "בית"], ["/money", "כספים"], ["/projects", "פרויקטים"],
   ["/time", "זמן"], ["/tasks", "משימות"], ["/calendar", "יומן"],
 ] as const;
 
 export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const [aal, setAal] = useState<string | null>(null);
+
+  // Two steps: the email link gives level aal1; the authenticator code raises it to aal2.
+  // The database also requires aal2 (see is_partner), so skipping this screen shows no data.
+  const checkAal = async () => {
+    const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    setAal(data?.currentLevel ?? null);
+  };
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+    supabase.auth.getSession().then(({ data }) => { setSession(data.session); if (data.session) checkAal(); });
+    // setTimeout: calling auth methods directly inside this callback can lock up supabase-js.
+    const { data } = supabase.auth.onAuthStateChange((_e, s) => { setSession(s); if (s) setTimeout(checkAal, 0); else setAal(null); });
     return () => data.subscription.unsubscribe();
   }, []);
 
   if (session === undefined) return <Loading />;
   if (!session) return <Login />;
+  if (aal === null) return <Loading />;
+  if (aal !== "aal2") return <TwoFactor onVerified={checkAal} />;
   return <Shell email={session.user.email ?? ""} />;
 }
 

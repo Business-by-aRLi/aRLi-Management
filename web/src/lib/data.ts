@@ -5,8 +5,10 @@ import { must, supabase } from "./supabase";
 export type Partner = { id: string; name: string; email: string | null; user_id: string | null };
 export type Project = {
   id: string; name: string; type: string; status: string; client_id: string | null;
-  agreed_price: number | null; notes: string | null; clients?: { name: string } | null;
+  agreed_price: number | null; notes: string | null; started_on: string | null; closed_on: string | null; clients?: { name: string } | null;
 };
+export type Idea = { id: string; title: string; description: string | null; status: string; created_by_partner_id: string | null; created_at: string; partners?: { name: string } | null };
+export type WorkPlan = { id: string; title: string; period_start: string | null; period_end: string | null; goals: string | null };
 export type Financials = { project_id: string; name: string; type: string; status: string; income: number; expenses: number; profit: number; shares_percent_total: number };
 export type Balance = { partner_id: string; name: string; entitled: number; held: number; net_position: number };
 export type Expense = {
@@ -21,8 +23,8 @@ export type Income = {
 };
 export type Settlement = { id: string; settled_on: string; amount: number; from_partner_id: string; to_partner_id: string; notes: string | null };
 export type Task = {
-  id: string; title: string; description: string | null; status: string; due_on: string | null; priority: number;
-  project_id: string | null; assignee_partner_id: string | null; projects?: { name: string } | null; partners?: { name: string } | null;
+  id: string; title: string; description: string | null; status: string; due_on: string | null; start_on: string | null; priority: number;
+  created_at: string; completed_at: string | null; work_plan_id: string | null; project_id: string | null; assignee_partner_id: string | null; projects?: { name: string } | null; partners?: { name: string } | null;
 };
 export type Meeting = { id: string; title: string; starts_at: string; ends_at: string | null; location: string | null; projects?: { name: string } | null };
 export type TimeEntry = { id: string; work_date: string; minutes: number; kind: string; description: string | null; projects?: { name: string } | null; partners?: { name: string } | null };
@@ -48,6 +50,8 @@ export const useTasks = () => q<Task[]>(["tasks"], () =>
   supabase.from("tasks").select("*,projects(name),partners(name)").order("due_on", { ascending: true, nullsFirst: false }));
 export const useMeetings = (fromIso: string, toIso: string) => q<Meeting[]>(["meetings", fromIso, toIso], () =>
   supabase.from("meetings").select("*,projects(name)").gte("starts_at", fromIso).lte("starts_at", toIso).order("starts_at"));
+export const useIdeas = () => q<Idea[]>(["ideas"], () => supabase.from("ideas").select("*,partners(name)").order("created_at", { ascending: false }));
+export const useWorkPlans = () => q<WorkPlan[]>(["work_plans"], () => supabase.from("work_plans").select("*").order("period_start", { ascending: false, nullsFirst: false }));
 export const useTime = () => q<TimeEntry[]>(["time"], () =>
   supabase.from("time_entries").select("*,projects(name),partners(name)").order("work_date", { ascending: false }).limit(500));
 
