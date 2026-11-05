@@ -969,13 +969,13 @@ async function showBalance(me: Partner, chatId: number) {
     summary: string;
     // deno-lint-ignore no-explicit-any
     business: any;
-    partners: { name: string; invested: number; profit_share: number; received: number }[];
+    partners: { name: string; invested: number; profit_share: number; balance: number }[];
   };
   const b = bal.business ?? {};
   const lines = ["⚖️ התחשבנות", ""];
   lines.push(`🏢 העסק: רווח ${fmtMoney(b.profit ?? 0)} (הכנסות ${fmtMoney(b.income ?? 0)}, הוצאות פרויקטים ${fmtMoney(b.project_expenses ?? 0)}, השקעות כלליות ${fmtMoney(b.general_expenses ?? 0)})`);
   for (const p of bal.partners) {
-    lines.push(`${p.name}: השקיעה ${fmtMoney(p.invested)} · חלקה ברווח ${fmtMoney(p.profit_share)} · קיבלה ${fmtMoney(p.received)}`);
+    lines.push(`${p.name}: השקיעה ${fmtMoney(p.invested)} · חלקה ברווח ${fmtMoney(p.profit_share)} · סה"כ יתרה ${fmtMoney(p.balance)}`);
   }
   await send(chatId, lines.join("\n"));
 }
