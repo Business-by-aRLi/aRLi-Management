@@ -4,20 +4,28 @@ import { useSave } from "../lib/data";
 import { Icon, type IconName } from "./icons";
 import { Button, Field, Input, Modal } from "./ui";
 import { ExpenseForm, IncomeForm, MeetingForm, TaskForm, TimeForm, useMe } from "./forms";
+import { DocumentUpload } from "./DocumentUpload";
 import { today } from "../lib/format";
 
-type Kind = "task" | "expense" | "income" | "time" | "meeting" | "idea";
+type Kind = "task" | "expense" | "income" | "time" | "meeting" | "idea" | "document";
 const KINDS: [Kind, string, IconName][] = [
   ["task", "משימה", "tasks"], ["expense", "הוצאה", "expense"], ["income", "הכנסה", "income"],
   ["time", "שעות", "time"], ["meeting", "פגישה", "meeting"], ["idea", "רעיון", "idea"],
 ];
-const TITLES: Record<Kind, string> = { task: "משימה חדשה", expense: "הוצאה חדשה", income: "הכנסה חדשה", time: "דיווח שעות", meeting: "פגישה חדשה", idea: "רעיון חדש" };
+const TITLES: Record<Kind, string> = { task: "משימה חדשה", expense: "הוצאה חדשה", income: "הכנסה חדשה", time: "דיווח שעות", meeting: "פגישה חדשה", idea: "רעיון חדש", document: "העלאת מסמך" };
 
 export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [kind, setKind] = useState<Kind | null>(null);
   const close = () => { setKind(null); onClose(); };
   return (
     <Modal open={open} onClose={close} title={kind ? TITLES[kind] : "מה מוסיפים?"}>
+      {!kind && (
+        <button onClick={() => setKind("document")}
+          className="press lift mb-2 flex w-full items-center gap-3 rounded-[18px] bg-[var(--ink-3)] px-4 py-4 text-start shadow-[inset_0_0_0_1px_var(--line)] hover:text-pink-soft">
+          <span className="grid size-11 shrink-0 place-items-center rounded-full bg-pink/15 text-pink-soft"><Icon name="receipt" size={22} /></span>
+          <span><span className="block text-[16px] font-semibold">העלאת מסמך</span><span className="block text-[14px] text-mute">חשבונית או קבלה, והמערכת ממלאת לבד</span></span>
+        </button>
+      )}
       {!kind && (
         <div className="grid grid-cols-3 gap-2">
           {KINDS.map(([k, label, icon]) => (
@@ -35,6 +43,7 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
       {kind === "time" && <TimeForm onDone={close} />}
       {kind === "meeting" && <MeetingForm onDone={close} />}
       {kind === "idea" && <IdeaForm onDone={close} />}
+      {kind === "document" && <DocumentUpload onDone={close} />}
     </Modal>
   );
 }

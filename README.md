@@ -40,3 +40,11 @@
 - Redirect URI מורשה: `https://yeapgpdxflrcttjxfrgl.supabase.co/functions/v1/telegram-bot/gmail/callback`
 - את מסך ההסכמה (OAuth consent screen) כדאי להעביר למצב "In production". במצב Testing ההרשאה פגה אחרי 7 ימים.
 - טבלאות: `gmail_accounts` (טוקנים, רק ה-service role ניגש), `gmail_oauth_states` (קישורי חיבור, תקפים 15 דקות).
+
+## העלאת מסמך באתר (`supabase/functions/parse-document`)
+
+במסך הכספים, "העלאת מסמך": מעלים תמונה או PDF של חשבונית או קבלה. הקובץ נשמר בדלי `receipts`, והפונקציה `parse-document` קוראת אותו עם Gemini ומחזירה הצעה: הוצאה או הכנסה, סכום, מטבע, תאריך, ספק או לקוח, מספר מסמך, קטגוריה, פרויקט משוער ורשומות שאולי כפולות. היא לא רושמת כלום. האתר מציג טופס מלא מראש, והשותפה מאשרת או מתקנת לפני השמירה. אם מבטלים, הקובץ נמחק.
+
+- הפונקציה מורידה את הקובץ עם ה-JWT של המשתמשת, כך שה-RLS של הדלי (`is_partner`) קובע הרשאה. פריסה עם `verify_jwt` פעיל.
+- סיקרט: `GEMINI_API_KEY` (אותו של הבוט). קוד Gemini משותף ב-`supabase/functions/_shared/gemini.ts`.
+- מיגרציה `20261105233000_income_receipts.sql` מוסיפה ל-`income` את `receipt_path` ו-`reference`.
