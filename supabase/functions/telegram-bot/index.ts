@@ -479,7 +479,7 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
     }
     case "get_balance": {
       // Three parties: the business, Miri and Riki. Nobody "holds" money.
-      const rows = check(await db.from("partner_summary").select("name,invested,profit_share,received,balance")) as { name: string; invested: number; profit_share: number; received: number; balance: number }[];
+      const rows = check(await db.from("partner_summary").select("name,invested,profit_share,expected_profit_share,received,balance")) as { name: string; invested: number; profit_share: number; expected_profit_share: number; received: number; balance: number }[];
       const business = check(await db.from("business_summary").select("*").single());
       const gets = rows.find((r) => r.balance > 0.005);
       const gives = rows.find((r) => r.balance < -0.005);
@@ -969,13 +969,17 @@ async function showBalance(me: Partner, chatId: number) {
     summary: string;
     // deno-lint-ignore no-explicit-any
     business: any;
-    partners: { name: string; invested: number; profit_share: number; balance: number }[];
+    partners: { name: string; invested: number; profit_share: number; expected_profit_share: number; balance: number }[];
   };
   const b = bal.business ?? {};
   const lines = ["⚖️ התחשבנות", ""];
   lines.push(`🏢 העסק: רווח ${fmtMoney(b.profit ?? 0)} (הכנסות ${fmtMoney(b.income ?? 0)}, הוצאות פרויקטים ${fmtMoney(b.project_expenses ?? 0)}, השקעות כלליות ${fmtMoney(b.general_expenses ?? 0)})`);
+  const pending = Number(b.outstanding ?? 0) > 0.005;
+  if (pending) lines.push(`🔮 רווח צפוי ${fmtMoney(b.expected_profit ?? 0)} · פער: עוד ${fmtMoney(b.outstanding)} מלקוחות`);
+  lines.push("");
   for (const p of bal.partners) {
-    lines.push(`${p.name}: השקיעה ${fmtMoney(p.invested)} · חלקה ברווח ${fmtMoney(p.profit_share)} · סה"כ יתרה ${fmtMoney(p.balance)}`);
+    lines.push(`${p.name}: השקיעה ${fmtMoney(p.invested)} · חלקה ברווח ${fmtMoney(p.profit_share)}` +
+      `${pending ? ` · חלקה ברווח הצפוי ${fmtMoney(p.expected_profit_share ?? 0)}` : ""} · סה"כ יתרה ${fmtMoney(p.balance)}`);
   }
   await send(chatId, lines.join("\n"));
 }
