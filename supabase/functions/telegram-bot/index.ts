@@ -228,7 +228,7 @@ const toolDeclarations = [
       required: ["project_name"],
     }),
   },
-  { name: "get_balance", description: "המאזן בין השותפות: מי חייבת למי וכמה.", parameters: S("object", undefined, { properties: {} }) },
+  { name: "get_balance", description: "ההתחשבנות בין שלושה צדדים: העסק, מירי וריקי. כמה כל אחת השקיעה, מה הרווח של העסק, כמה כל אחת קיבלה, ומי מעבירה למי כדי להתאזן.", parameters: S("object", undefined, { properties: {} }) },
   {
     name: "list_projects", description: "רשימת פרויקטים עם הכנסות, הוצאות ורווח.",
     parameters: S("object", undefined, { properties: { status: S("string", undefined, { enum: ["active", "paused", "closed"] }) } }),
@@ -478,12 +478,16 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
       return { ok: true, project: project.name };
     }
     case "get_balance": {
-      const rows = check(await db.from("partner_balances").select("*")) as { name: string; entitled: number; held: number; net_position: number }[];
-      const owes = rows.find((r) => r.net_position > 0.005);
-      const owed = rows.find((r) => r.net_position < -0.005);
+      // Three parties: the business, Miri and Riki. Nobody "holds" money.
+      const rows = check(await db.from("partner_summary").select("name,invested,profit_share,received,balance")) as { name: string; invested: number; profit_share: number; received: number; balance: number }[];
+      const business = check(await db.from("business_summary").select("*").single());
+      const gets = rows.find((r) => r.balance > 0.005);
+      const gives = rows.find((r) => r.balance < -0.005);
       return {
+        business,
         partners: rows,
-        summary: owes && owed ? `${owes.name} חייבת ל${owed.name} ${fmtMoney(owes.net_position)}` : "אתן מאוזנות",
+        explain: "invested = expenses she paid (general costs are an investment, split 50/50); profit_share = her share of the business profit; received = money that reached her; balance > 0 = still coming to her. Never say a partner 'holds' money.",
+        summary: gets && gives ? `כדי להתאזן, ${gives.name} מעבירה ל${gets.name} ${fmtMoney(gets.balance)}` : "אתן מאוזנות",
       };
     }
     case "list_projects": {
@@ -772,7 +776,8 @@ function systemPrompt(me: Partner) {
 
 כללים:
 - הבעלות על הכסף: אין לעסק חשבון בנק. כל הוצאה שולמה מהחשבון הפרטי של אחת השותפות, וכל הכנסה התקבלה אצל אחת מהן.
-- רווח של פרויקט = הכנסות פחות הוצאות, ומתחלק לפי האחוזים של הפרויקט. הוצאות שלא שייכות לפרויקט מתחלקות חצי-חצי.
+- ההתחשבנות היא בין שלושה צדדים: העסק, מירי וריקי. הוצאה ששותפה שילמה היא השקעה שלה בעסק. הוצאות כלליות (בלי פרויקט) הן השקעה בעסק ומתחלקות חצי-חצי. רווח של פרויקט = הכנסות פחות הוצאות, ומתחלק לפי האחוזים של הפרויקט.
+- כשמסבירים התחשבנות: כמה כל אחת השקיעה, כמה העסק הרוויח, מה חלקה ברווח, כמה קיבלה, ומי מעבירה למי. אף פעם לא לומר שמישהי "מחזיקה" כסף.
 - אחרי כל רישום, אשרי במשפט אחד מה נרשם (סכום, תאריך, פרויקט, מי שילמה).
 - לפני מחיקה, בקשי אישור מפורש.
 - אל תמציאי נתונים. אם חסר משהו חיוני, כמו סכום, שאלי.
@@ -1176,7 +1181,7 @@ async function runCron() {
       const { data: inc } = await db.from("income").select("amount").gte("received_on", weekAgo);
       const sum = (rows: { amount: number }[] | null) => (rows ?? []).reduce((s, r) => s + Number(r.amount), 0);
       const bal = (await runTool("get_balance", {}, { me: all[0], receiptPath: null, today: now.date })) as { summary: string };
-      await sendTo(null, `📊 סיכום שבועי\nהוצאות השבוע: ${fmtMoney(sum(exp))}\nהכנסות השבוע: ${fmtMoney(sum(inc))}\nמאזן: ${bal.summary}`);
+      await sendTo(null, `📊 סיכום שבועי\nהוצאות השבוע: ${fmtMoney(sum(exp))}\nהכנסות השבוע: ${fmtMoney(sum(inc))}\nהתחשבנות: ${bal.summary}`);
       await db.from("app_config").upsert({ key: "weekly_summary_sent", value: now.date });
     }
   }

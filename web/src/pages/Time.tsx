@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react";
 import { useRemove, useTime } from "../lib/data";
 import { date, hours } from "../lib/format";
-import { Button, Card, Empty, Input, Loading, Modal, Num, PageTitle } from "../components/ui";
+import { Button, Card, Empty, IconButton, Loading, Modal, MonthSelect, Num, PageTitle, useConfirm } from "../components/ui";
 import { TimeForm } from "../components/forms";
 
 export default function TimePage() {
   const { data, isLoading } = useTime();
   const remove = useRemove("time_entries");
+  const confirm = useConfirm();
   const [adding, setAdding] = useState(false);
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
   const rows = useMemo(() => (data ?? []).filter((r) => !month || r.work_date.startsWith(month)), [data, month]);
@@ -32,7 +33,7 @@ export default function TimePage() {
   return (
     <div className="space-y-8">
       <PageTitle eyebrow="זמן" title="לאן הולכות השעות." action={<Button arrow className="group" onClick={() => setAdding(true)}>דיווח שעות</Button>} />
-      <div className="max-w-xs"><Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} /></div>
+      <div className="max-w-xs"><MonthSelect value={month} onChange={setMonth} /></div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         {summary.map(([name, s]) => (
@@ -62,8 +63,8 @@ export default function TimePage() {
           <div key={r.id} className="row-line flex flex-wrap items-center justify-between gap-3 py-3">
             <span className="text-[14px] text-mute"><Num>{date(r.work_date)}</Num></span>
             <span className="flex-1">{r.projects?.name ?? "כללי"}<span className="text-mute"> · {r.partners?.name} · {r.kind === "learning" ? "למידה" : "עבודה"}{r.description ? ` · ${r.description}` : ""}</span></span>
-            <Num>{hours(r.minutes)}</Num>
-            <Button variant="quiet" onClick={() => confirm("למחוק?") && remove.mutate(r.id)}>מחיקה</Button>
+            <span className="font-medium"><Num>{hours(r.minutes)}</Num></span>
+            <IconButton icon="trash" label="מחיקת הדיווח" onClick={async () => (await confirm({ title: "למחוק את הדיווח?", body: `${r.projects?.name ?? "כללי"}, ${hours(r.minutes)}` })) && remove.mutate(r.id)} />
           </div>
         ))}
       </Card>

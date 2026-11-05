@@ -45,13 +45,20 @@ function Actions({ pending, error, onCancel }: { pending: boolean; error: unknow
 
 const nullIfEmpty = (v: string) => (v === "" ? null : v);
 
-export function ExpenseForm({ row, onDone }: { row?: Expense; onDone: () => void }) {
+type ExpenseFields = { amount: string; description: string; spent_on: string; project_id: string; paid_by_partner_id: string; category: string; reference: string; notes: string };
+type IncomeFields = { amount: string; received_on: string; project_id: string; received_by_partner_id: string; method: string; reference: string; notes: string };
+
+// `initial` prefills a new row (from a parsed document); `receiptPath` is a document that is already uploaded;
+// `onCancel` runs instead of onDone when the partner cancels (so an unused upload can be removed).
+export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel }: {
+  row?: Expense; onDone: () => void; initial?: Partial<ExpenseFields>; receiptPath?: string; onCancel?: () => void;
+}) {
   const me = useMe();
   const save = useSave("expenses");
-  const [f, setF] = useState({
+  const [f, setF] = useState<ExpenseFields>({
     amount: row?.amount?.toString() ?? "", description: row?.description ?? "", spent_on: row?.spent_on ?? today(),
     project_id: row?.project_id ?? "", paid_by_partner_id: row?.paid_by_partner_id ?? "", category: row?.category ?? "",
-    reference: row?.reference ?? "",
+    reference: row?.reference ?? "", notes: row?.notes ?? "", ...initial,
   });
   const [file, setFile] = useState<File | null>(null);
   useEffect(() => { if (!f.paid_by_partner_id && me) setF((s) => ({ ...s, paid_by_partner_id: me.id })); }, [me]);
@@ -59,12 +66,13 @@ export function ExpenseForm({ row, onDone }: { row?: Expense; onDone: () => void
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    const receipt_path = file ? await uploadReceipt(file) : row?.receipt_path ?? null;
+    const receipt_path = file ? await uploadReceipt(file) : receiptPath ?? row?.receipt_path ?? null;
     await save.mutateAsync({
       id: row?.id,
       values: {
         amount: Number(f.amount), description: f.description, spent_on: f.spent_on, project_id: nullIfEmpty(f.project_id),
-        paid_by_partner_id: f.paid_by_partner_id, category: nullIfEmpty(f.category), reference: nullIfEmpty(f.reference), receipt_path,
+        paid_by_partner_id: f.paid_by_partner_id, category: nullIfEmpty(f.category), reference: nullIfEmpty(f.reference),
+        notes: nullIfEmpty(f.notes), receipt_path,
       },
     });
     onDone();
@@ -79,35 +87,38 @@ export function ExpenseForm({ row, onDone }: { row?: Expense; onDone: () => void
       <Field label="מי שילמה"><PartnerSelect value={f.paid_by_partner_id} onChange={set("paid_by_partner_id")} /></Field>
       <Field label="קטגוריה"><Input value={f.category} onChange={(e) => set("category")(e.target.value)} placeholder="תוכנה, ציוד, נסיעות…" /></Field>
       <Field label="אסמכתה"><Input value={f.reference} onChange={(e) => set("reference")(e.target.value)} /></Field>
-      <div className="sm:col-span-2">
-        <Field label="קבלה" hint={row?.receipt_path && !file ? "כבר יש קבלה מצורפת. בחירת קובץ חדש תחליף אותה." : "תמונה או PDF"}>
-          <input type="file" accept="image/*,application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="text-[14px] text-mute file:me-3 file:rounded-full file:border-0 file:bg-[var(--ink-3)] file:px-4 file:py-2 file:text-bone" />
-        </Field>
-      </div>
-      <div className="sm:col-span-2"><Actions pending={save.isPending} error={save.error} onCancel={onDone} /></div>
+      <div className="sm:col-span-2"><Field label="הערות"><Input value={f.notes} onChange={(e) => set("notes")(e.target.value)} /></Field></div>
+      {!receiptPath && <div className="sm:col-span-2"><ReceiptInput hasExisting={!!row?.receipt_path} file={file} setFile={setFile} /></div>}
+      <div className="sm:col-span-2"><Actions pending={save.isPending} error={save.error} onCancel={onCancel ?? onDone} /></div>
     </form>
   );
 }
 
-export function IncomeForm({ row, onDone }: { row?: Income; onDone: () => void }) {
+export function IncomeForm({ row, onDone, initial, receiptPath, onCancel }: {
+  row?: Income; onDone: () => void; initial?: Partial<IncomeFields>; receiptPath?: string; onCancel?: () => void;
+}) {
   const me = useMe();
   const projects = useProjects();
   const save = useSave("income");
-  const [f, setF] = useState({
+  const [f, setF] = useState<IncomeFields>({
     amount: row?.amount?.toString() ?? "", received_on: row?.received_on ?? today(), project_id: row?.project_id ?? "",
-    received_by_partner_id: row?.received_by_partner_id ?? "", method: row?.method ?? "", notes: row?.notes ?? "",
+    received_by_partner_id: row?.received_by_partner_id ?? "", method: row?.method ?? "", reference: row?.reference ?? "",
+    notes: row?.notes ?? "", ...initial,
   });
+  const [file, setFile] = useState<File | null>(null);
   useEffect(() => { if (!f.received_by_partner_id && me) setF((s) => ({ ...s, received_by_partner_id: me.id })); }, [me]);
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     const client_id = projects.data?.find((p) => p.id === f.project_id)?.client_id ?? null;
+    const receipt_path = file ? await uploadReceipt(file) : receiptPath ?? row?.receipt_path ?? null;
     await save.mutateAsync({
       id: row?.id,
       values: {
         amount: Number(f.amount), received_on: f.received_on, project_id: nullIfEmpty(f.project_id), client_id,
-        received_by_partner_id: f.received_by_partner_id, method: nullIfEmpty(f.method), notes: nullIfEmpty(f.notes),
+        received_by_partner_id: f.received_by_partner_id, method: nullIfEmpty(f.method), reference: nullIfEmpty(f.reference),
+        notes: nullIfEmpty(f.notes), receipt_path,
       },
     });
     onDone();
@@ -120,9 +131,19 @@ export function IncomeForm({ row, onDone }: { row?: Income; onDone: () => void }
       <Field label="פרויקט"><ProjectSelect value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" /></Field>
       <Field label="מי קיבלה"><PartnerSelect value={f.received_by_partner_id} onChange={set("received_by_partner_id")} /></Field>
       <Field label="אמצעי תשלום"><Input value={f.method} onChange={(e) => set("method")(e.target.value)} placeholder="העברה, ביט, צ׳ק…" /></Field>
+      <Field label="אסמכתה"><Input value={f.reference} onChange={(e) => set("reference")(e.target.value)} /></Field>
       <Field label="הערות"><Input value={f.notes} onChange={(e) => set("notes")(e.target.value)} /></Field>
-      <div className="sm:col-span-2"><Actions pending={save.isPending} error={save.error} onCancel={onDone} /></div>
+      {!receiptPath && <div className="sm:col-span-2"><ReceiptInput hasExisting={!!row?.receipt_path} file={file} setFile={setFile} label="מסמך" /></div>}
+      <div className="sm:col-span-2"><Actions pending={save.isPending} error={save.error} onCancel={onCancel ?? onDone} /></div>
     </form>
+  );
+}
+
+function ReceiptInput({ hasExisting, file, setFile, label = "קבלה" }: { hasExisting: boolean; file: File | null; setFile: (f: File | null) => void; label?: string }) {
+  return (
+    <Field label={label} hint={hasExisting && !file ? "כבר יש מסמך מצורף. בחירת קובץ חדש תחליף אותו." : "תמונה או PDF"}>
+      <input type="file" accept="image/*,application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="text-[14px] text-mute file:me-3 file:rounded-full file:border-0 file:bg-[var(--ink-3)] file:px-4 file:py-2 file:text-bone" />
+    </Field>
   );
 }
 

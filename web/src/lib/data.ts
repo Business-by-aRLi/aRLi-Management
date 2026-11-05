@@ -13,12 +13,12 @@ export type Financials = { project_id: string; name: string; type: string; statu
 export type Balance = { partner_id: string; name: string; entitled: number; held: number; net_position: number };
 export type Expense = {
   id: string; spent_on: string; amount: number; description: string; category: string | null; reference: string | null;
-  receipt_path: string | null; project_id: string | null; paid_by_partner_id: string | null;
+  receipt_path: string | null; notes?: string | null; project_id: string | null; paid_by_partner_id: string | null;
   projects?: { name: string } | null; partners?: { name: string } | null;
 };
 export type Income = {
   id: string; received_on: string; amount: number; method: string | null; notes: string | null;
-  project_id: string | null; received_by_partner_id: string | null;
+  reference: string | null; receipt_path: string | null; project_id: string | null; received_by_partner_id: string | null;
   projects?: { name: string } | null; partners?: { name: string } | null;
 };
 export type Settlement = { id: string; settled_on: string; amount: number; from_partner_id: string; to_partner_id: string; notes: string | null };
@@ -37,6 +37,10 @@ const q = <T,>(key: unknown[], fn: () => PromiseLike<{ data: unknown; error: { m
 export const usePartners = () => q<Partner[]>(["partners"], () => supabase.from("partners").select("id,name,email,user_id").order("name"));
 export const useProjects = () => q<Project[]>(["projects"], () => supabase.from("projects").select("*,clients(name)").order("name"));
 export const useFinancials = () => q<Financials[]>(["financials"], () => supabase.from("project_financials").select("*"));
+export type PartnerSummary = { partner_id: string; name: string; invested: number; profit_share: number; due: number; received: number; balance: number };
+export type BusinessSummary = { income: number; project_expenses: number; general_expenses: number; profit: number };
+export const usePartnerSummary = () => q<PartnerSummary[]>(["balances", "partners"], () => supabase.from("partner_summary").select("*"));
+export const useBusinessSummary = () => q<BusinessSummary>(["balances", "business"], () => supabase.from("business_summary").select("*").single());
 export const useBalances = () => q<Balance[]>(["balances"], () => supabase.from("partner_balances").select("*"));
 export const useShares = () => q<Share[]>(["shares"], () => supabase.from("project_profit_shares").select("*"));
 export const useExpenses = () => q<Expense[]>(["expenses"], () =>
@@ -93,4 +97,26 @@ export async function uploadReceipt(file: File) {
   const path = `${new Date().toISOString().slice(0, 7)}/${crypto.randomUUID()}.${ext}`;
   must(await supabase.storage.from("receipts").upload(path, file, { contentType: file.type }));
   return path;
+}
+
+export async function deleteReceipt(path: string) {
+  await supabase.storage.from("receipts").remove([path]);
+}
+
+// What the parse-document function read from an uploaded invoice / receipt. Every field may be missing.
+export type ParsedDocument = {
+  is_financial_document: boolean; kind: "expense" | "income"; confidence: "high" | "medium" | "low";
+  counterparty?: string; amount?: number; currency: string; date?: string; invoice_number?: string;
+  description?: string; category?: string; project_id: string | null; payment_method?: string; note?: string;
+  duplicates: { table: string; id: string; date: string; amount: number }[];
+};
+
+export async function parseDocument(path: string): Promise<ParsedDocument> {
+  const { data, error } = await supabase.functions.invoke("parse-document", { body: { path } });
+  if (error) {
+    // The function answers errors as { error: "..." } in Hebrew; show that when we have it.
+    const body = await (error as { context?: Response }).context?.json?.().catch(() => null);
+    throw new Error(body?.error ?? "לא הצלחתי לקרוא את המסמך. אפשר למלא ידנית.");
+  }
+  return data as ParsedDocument;
 }
