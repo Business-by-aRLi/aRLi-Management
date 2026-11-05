@@ -208,6 +208,13 @@ export function BalanceModule() {
           <p className="mt-1 text-[13px] text-mute">
             הכנסות <Num>{money(biz.income)}</Num> · הוצאות פרויקטים <Num>{money(biz.project_expenses)}</Num> · השקעות כלליות <Num>{money(biz.general_expenses)}</Num>
           </p>
+          {biz.outstanding > 0.005 && (
+            <div className="mt-3 flex flex-wrap items-baseline justify-between gap-2 border-t border-[var(--line)] pt-3 text-[14px]">
+              <span className="text-mute">רווח צפוי, כשכל התמורה תתקבל</span>
+              <span><Num className="font-semibold">{money(biz.expected_profit)}</Num>
+                <span className="text-mute"> · פער: עוד <Num>{money(biz.outstanding)}</Num> מלקוחות</span></span>
+            </div>
+          )}
         </div>
       )}
 
@@ -217,6 +224,7 @@ export function BalanceModule() {
             <p className="mb-2 text-[16px] font-medium">{r.name}</p>
             <Line label="השקיעה" value={r.invested} />
             <Line label="חלקה ברווח" value={r.profit_share} />
+            {biz && biz.outstanding > 0.005 && <Line label="חלקה ברווח הצפוי" value={r.expected_profit_share} />}
             <Line label="קיבלה" value={r.received} />
             <div className="mt-2 flex justify-between border-t border-[var(--line)] pt-2">
               <span className="text-mute">סה״כ יתרה</span>
