@@ -4,8 +4,7 @@ import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
 import { usePartners } from "./lib/data";
 import { Button, Loading, Modal } from "./components/ui";
-import Login from "./pages/Login";
-import TwoFactor from "./pages/TwoFactor";
+import Login, { SET_PASSWORD_FLAG, SetPassword } from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Money from "./pages/Money";
 import Projects from "./pages/Projects";
@@ -21,26 +20,22 @@ const LINKS = [
 
 export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
-  const [aal, setAal] = useState<string | null>(null);
-
-  // Two steps: the email link gives level aal1; the authenticator code raises it to aal2.
-  // The database also requires aal2 (see is_partner), so skipping this screen shows no data.
-  const checkAal = async () => {
-    const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-    setAal(data?.currentLevel ?? null);
-  };
+  const needsPassword = () => { try { return localStorage.getItem(SET_PASSWORD_FLAG) === "1"; } catch { return false; } };
+  const [setPw, setSetPw] = useState(needsPassword());
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => { setSession(data.session); if (data.session) checkAal(); });
-    // setTimeout: calling auth methods directly inside this callback can lock up supabase-js.
-    const { data } = supabase.auth.onAuthStateChange((_e, s) => { setSession(s); if (s) setTimeout(checkAal, 0); else setAal(null); });
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data } = supabase.auth.onAuthStateChange((event, s) => {
+      setSession(s);
+      if (event === "PASSWORD_RECOVERY") setSetPw(true);
+      if (event === "SIGNED_IN") setSetPw(needsPassword());
+    });
     return () => data.subscription.unsubscribe();
   }, []);
 
   if (session === undefined) return <Loading />;
   if (!session) return <Login />;
-  if (aal === null) return <Loading />;
-  if (aal !== "aal2") return <TwoFactor onVerified={checkAal} />;
+  if (setPw) return <SetPassword onDone={() => setSetPw(false)} />;
   return <Shell email={session.user.email ?? ""} />;
 }
 
@@ -76,7 +71,7 @@ function Shell({ email }: { email: string }) {
       </nav>
 
       <Modal open={askLogout} onClose={() => setAskLogout(false)} title="להתנתק מהמערכת?">
-        <p className="mb-6 text-mute">בכניסה הבאה תצטרכי קישור חדש מהמייל וקוד מאפליקציית האימות.</p>
+        <p className="mb-6 text-mute">בכניסה הבאה תצטרכי את המייל והסיסמה.</p>
         <div className="flex gap-3">
           <Button arrow className="group" onClick={() => supabase.auth.signOut()}>כן, להתנתק</Button>
           <Button variant="ghost" onClick={() => setAskLogout(false)}>להישאר</Button>
