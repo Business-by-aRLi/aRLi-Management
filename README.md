@@ -22,3 +22,12 @@
 `net_position` חיובי פירושו שהשותפה מחזיקה יותר מהחלק שלה וחייבת את ההפרש.
 
 הרשאות: כל הטבלאות מוגנות ב-RLS. רק משתמש מחובר שמקושר לשותפה רואה נתונים. קבלות נשמרות בדלי פרטי `receipts`.
+
+## בוט טלגרם (`supabase/functions/telegram-bot`)
+
+הבוט רץ כ-Edge Function ב-Supabase, ומשתמש ב-Gemini להבנת טקסט, צילומי חשבוניות והודעות קוליות.
+
+- סיקרטים: `TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`. אפשר גם `GEMINI_MODEL` (ברירת מחדל `gemini-flash-latest`).
+- כל שותפה מתחברת פעם אחת עם קוד חיבור אישי (`partners.telegram_link_code`).
+- `?action=setup` רושם את ה-webhook בטלגרם.
+- `?action=cron` רץ כל דקה (pg_cron) ושולח: תזכורות, התראה שעה לפני פגישה, דדליינים של משימות מ-08:00, וסיכום שבועי בימי ראשון ב-09:00.
