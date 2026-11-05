@@ -10,7 +10,7 @@ export type Project = {
 export type Client = { id: string; name: string; contact_name: string | null; phone: string | null; email: string | null; notes: string | null; created_at: string };
 export type Idea = { id: string; title: string; description: string | null; status: string; created_by_partner_id: string | null; created_at: string; partners?: { name: string } | null };
 export type WorkPlan = { id: string; title: string; period_start: string | null; period_end: string | null; goals: string | null };
-export type Financials = { project_id: string; name: string; type: string; status: string; income: number; expenses: number; profit: number; shares_percent_total: number };
+export type Financials = { project_id: string; name: string; type: string; status: string; income: number; expenses: number; profit: number; shares_percent_total: number; agreed_price: number | null; outstanding: number; expected_income: number; expected_profit: number };
 export type Balance = { partner_id: string; name: string; entitled: number; held: number; net_position: number };
 export type Expense = {
   id: string; spent_on: string; amount: number; description: string; category: string | null; reference: string | null;

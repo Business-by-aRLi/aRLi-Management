@@ -48,7 +48,7 @@ export default function ProjectPage() {
       </section>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <SplitCard projectId={p.id} profit={Number(f?.profit ?? 0)} partners={partners.data ?? []} />
+        <SplitCard projectId={p.id} profit={Number(f?.profit ?? 0)} expected={f?.outstanding ? Number(f.expected_profit) : null} partners={partners.data ?? []} />
         <DetailsCard key={p.id} project={p} />
       </div>
 
@@ -90,7 +90,7 @@ export default function ProjectPage() {
 }
 
 // Profit split per project. One slider: Miri's share, Riki gets the rest.
-function SplitCard({ projectId, profit, partners }: { projectId: string; profit: number; partners: { id: string; name: string }[] }) {
+function SplitCard({ projectId, profit, expected, partners }: { projectId: string; profit: number; expected: number | null; partners: { id: string; name: string }[] }) {
   const shares = useShares();
   const save = useSaveShares();
   const mine = shares.data?.filter((s) => s.project_id === projectId) ?? [];
@@ -113,6 +113,14 @@ function SplitCard({ projectId, profit, partners }: { projectId: string; profit:
       <div className="mt-2 flex justify-between text-[14px] text-mute">
         <Num>{money((profit * pct) / 100)}</Num><Num>{money((profit * (100 - pct)) / 100)}</Num>
       </div>
+      {expected != null && (
+        <div className="mt-3 border-t border-[var(--line)] pt-3">
+          <p className="mb-1 text-[13px] text-mute">לפי הצפי, כשכל התמורה תתקבל (רווח צפוי <Num>{money(expected)}</Num>):</p>
+          <div className="flex justify-between text-[15px]">
+            <Num>{money((expected * pct) / 100)}</Num><Num>{money((expected * (100 - pct)) / 100)}</Num>
+          </div>
+        </div>
+      )}
       {dirty && (
         <div className="mt-5 flex gap-3">
           <Button arrow className="group" disabled={save.isPending} onClick={() => save.mutate([
