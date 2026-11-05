@@ -198,9 +198,7 @@ export function BalanceModule() {
         <h2 className="text-[24px] font-semibold">התחשבנות</h2>
         <Link to="/money" className="text-[15px] text-pink hover:text-pink-soft">לכספים ←</Link>
       </div>
-      <p className="mb-5 text-[15px] text-mute">
-        {gets && gives ? <>כדי להתאזן, {gives.name} מעבירה ל{gets.name} <span className="text-bone"><Num>{money(gets.balance)}</Num></span>.</> : "אתן מאוזנות. אין מה להעביר."}
-      </p>
+      <div className="mb-4" />
 
       {biz && (
         <div className="mb-5 rounded-2xl bg-[var(--ink-3)]/60 px-4 py-3">
