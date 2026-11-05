@@ -195,6 +195,10 @@ export function BalanceModule() {
   const monthExp = (expenses.data ?? []).filter((e) => e.spent_on.startsWith(m)).reduce((s, e) => s + Number(e.amount), 0);
   const monthInc = (income.data ?? []).filter((e) => e.received_on.startsWith(m)).reduce((s, e) => s + Number(e.amount), 0);
   const max = Math.max(1, ...rows.flatMap((r) => [Math.abs(r.entitled), Math.abs(r.held)]));
+  // General business expenses (not tied to a project) are split equally. Show it so the math is visible.
+  const general = (expenses.data ?? []).filter((e) => !e.project_id);
+  const generalTotal = general.reduce((s, e) => s + Number(e.amount), 0);
+  const generalBy = (id: string) => general.filter((e) => e.paid_by_partner_id === id).reduce((s, e) => s + Number(e.amount), 0);
 
   return (
     <Card>
@@ -215,6 +219,13 @@ export function BalanceModule() {
           </div>
         </div>
       ))}
+      {generalTotal > 0 && (
+        <div className="mt-5 rounded-2xl bg-[var(--ink-3)]/60 px-4 py-3 text-[14px] text-mute">
+          <p><span className="text-bone">הוצאות כלליות של העסק</span>, חצי-חצי: <Num>{money(generalTotal)}</Num>, כלומר <Num>{money(generalTotal / Math.max(1, rows.length))}</Num> לכל אחת.</p>
+          <p className="mt-1">{rows.map((r) => <span key={r.partner_id} className="me-4">{r.name} שילמה <Num>{money(generalBy(r.partner_id))}</Num></span>)}</p>
+          <p className="mt-1 text-[13px] text-mute-2">זה כבר נכלל בחישוב למעלה.</p>
+        </div>
+      )}
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-4 text-[14px] text-mute">
         <span>החודש: נכנס <Num>{money(monthInc)}</Num> · יצא <Num>{money(monthExp)}</Num></span>
         {owes && owed && <Button variant="ghost" className="!py-1.5 text-[14px]" onClick={() => setSettle(true)}>רישום התחשבנות</Button>}
