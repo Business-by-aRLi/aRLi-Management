@@ -12,6 +12,8 @@ export const hours = (minutes: number) => `${Math.round((minutes / 60) * 10) / 1
 // Today in Israel as YYYY-MM-DD
 export const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jerusalem" }).format(new Date());
 
-export const PROJECT_TYPE: Record<string, string> = { business: "עסקי", learning: "למידה", client: "לקוח" };
+// A project's type is shown as a tag on it, not as a separate section.
+export const PROJECT_TAG: Record<string, string> = { client: "לקוח", business: "עסקי", learning: "למידה" };
+export const PROJECT_TYPE = PROJECT_TAG;
 export const PROJECT_STATUS: Record<string, string> = { active: "פעיל", paused: "מושהה", closed: "סגור" };
 export const TASK_STATUS: Record<string, string> = { todo: "לביצוע", in_progress: "בעבודה", done: "בוצע" };

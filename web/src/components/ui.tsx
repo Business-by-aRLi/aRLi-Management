@@ -193,3 +193,34 @@ export function ErrorNote({ error }: { error: unknown }) {
 }
 
 export const Num = ({ children, className = "" }: { children: ReactNode; className?: string }) => <bdi className={`num ${className}`}>{children}</bdi>;
+
+// A project's tag (client / business / learning): a small mark with a coloured dot, not a section of its own.
+const TAG_DOT: Record<string, string> = { client: "bg-pink", business: "bg-bone", learning: "bg-mute-2" };
+export function Tag({ type, label }: { type: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[13px] font-medium text-bone/85 shadow-[inset_0_0_0_1px_var(--line-2)]">
+      <span className={`size-1.5 rounded-full ${TAG_DOT[type] ?? "bg-mute"}`} aria-hidden />{label}
+    </span>
+  );
+}
+
+// Search field with an icon, used at the top of lists.
+export function SearchInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
+  return (
+    <span className="relative block w-full sm:w-72">
+      <Icon name="search" size={18} className="pointer-events-none absolute top-1/2 start-3.5 -translate-y-1/2 text-mute" />
+      <input type="search" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} aria-label={placeholder}
+        className="field" style={{ paddingInlineStart: 42, paddingBlock: 10 }} />
+    </span>
+  );
+}
+
+// Thin progress bar: how much of an agreed price has come in.
+export function Progress({ value, max }: { value: number; max: number }) {
+  const pct = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
+  return (
+    <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--ink-3)]" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
+      <div className="h-full rounded-full bg-pink transition-[width] duration-700" style={{ width: `${pct}%` }} />
+    </div>
+  );
+}

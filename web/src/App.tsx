@@ -11,6 +11,8 @@ import Dashboard from "./pages/Dashboard";
 import Money from "./pages/Money";
 import Projects from "./pages/Projects";
 import ProjectPage from "./pages/ProjectPage";
+import Clients from "./pages/Clients";
+import ClientPage from "./pages/ClientPage";
 import TimePage from "./pages/Time";
 import Tasks from "./pages/Tasks";
 import CalendarPage from "./pages/Calendar";
@@ -18,11 +20,11 @@ import CalendarPage from "./pages/Calendar";
 // Order follows daily use: plan first (home, tasks, calendar), then the books.
 const LINKS: [string, string, IconName][] = [
   ["/", "בית", "home"], ["/tasks", "משימות", "tasks"], ["/calendar", "יומן", "calendar"],
-  ["/projects", "פרויקטים", "projects"], ["/money", "כספים", "money"], ["/time", "זמן", "time"],
+  ["/projects", "פרויקטים", "projects"], ["/clients", "לקוחות", "clients"], ["/money", "כספים", "money"], ["/time", "זמן", "time"],
 ];
 // On a phone the tab bar holds four places and the "+"; the rest live under "עוד".
-const PHONE_TABS = LINKS.slice(0, 2).concat(LINKS.slice(4, 5));
-const PHONE_MORE = [LINKS[2], LINKS[3], LINKS[5]];
+const PHONE_TABS = [LINKS[0], LINKS[1], LINKS[5]];
+const PHONE_MORE = [LINKS[2], LINKS[3], LINKS[4], LINKS[6]];
 
 export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -125,6 +127,8 @@ function Shell({ email }: { email: string }) {
           <Route path="/money" element={<Money />} />
           <Route path="/projects" element={<Projects />} />
           <Route path="/projects/:id" element={<ProjectPage />} />
+          <Route path="/clients" element={<Clients />} />
+          <Route path="/clients/:id" element={<ClientPage />} />
           <Route path="/time" element={<TimePage />} />
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/calendar" element={<CalendarPage />} />
