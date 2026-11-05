@@ -19,7 +19,8 @@ const ERRORS: Record<string, string> = {
 };
 
 export default function Login() {
-  const [mode, setMode] = useState<"login" | "link">("login");
+  const [mode, setMode] = useState<"login" | "signup" | "link">("login");
+  const [password2, setPassword2] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRem] = useState(true);
@@ -33,6 +34,20 @@ export default function Login() {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setBusy(false);
     if (error) setMsg({ kind: "error", text: ERRORS[error.message] ?? error.message });
+  }
+
+  // First time: create the account with a password right away (needs "Confirm email" off in Supabase).
+  async function signup(e: React.FormEvent) {
+    e.preventDefault();
+    const problem = passwordProblem(password);
+    if (problem) return setMsg({ kind: "error", text: `הסיסמה חלשה: ${problem}` });
+    if (password !== password2) return setMsg({ kind: "error", text: "הסיסמאות לא זהות" });
+    setBusy(true); setMsg(null);
+    setRemember(remember);
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    setBusy(false);
+    if (error) setMsg({ kind: "error", text: error.message.includes("already registered") ? "כבר יש חשבון למייל הזה. נסי להיכנס עם הסיסמה." : error.message });
+    else if (!data.session) setMsg({ kind: "ok", text: "החשבון נוצר. שלחנו מייל לאישור, ואחרי האישור אפשר להיכנס." });
   }
 
   async function sendLink(e: React.FormEvent) {
@@ -55,13 +70,18 @@ export default function Login() {
           בונים את <span className="text-pink">aRLi.</span>
         </h1>
         <Card>
-          <form onSubmit={mode === "login" ? login : sendLink} className="space-y-5">
+          <form onSubmit={mode === "login" ? login : mode === "signup" ? signup : sendLink} className="space-y-5">
             <Field label="מייל">
               <Input type="email" dir="ltr" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@gmail.com" />
             </Field>
-            {mode === "login" && (
-              <Field label="סיסמה">
-                <Input type="password" dir="ltr" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            {mode !== "link" && (
+              <Field label="סיסמה" hint={mode === "signup" ? "לפחות 10 תווים, עם אותיות, ספרות וסימן" : undefined}>
+                <Input type="password" dir="ltr" required autoComplete={mode === "signup" ? "new-password" : "current-password"} value={password} onChange={(e) => setPassword(e.target.value)} />
+              </Field>
+            )}
+            {mode === "signup" && (
+              <Field label="שוב, לאימות">
+                <Input type="password" dir="ltr" required autoComplete="new-password" value={password2} onChange={(e) => setPassword2(e.target.value)} />
               </Field>
             )}
             <label className="flex cursor-pointer items-center gap-2.5 text-[15px]">
@@ -70,12 +90,14 @@ export default function Login() {
             </label>
             {msg && <p className={`text-[14px] ${msg.kind === "error" ? "text-error" : "text-pink-soft"}`}>{msg.text}</p>}
             <Button arrow className="group" disabled={busy}>
-              {busy ? "רגע…" : mode === "login" ? "כניסה" : "שלחו לי קישור"}
+              {busy ? "רגע…" : mode === "login" ? "כניסה" : mode === "signup" ? "פתיחת חשבון" : "שלחו לי קישור לאיפוס"}
             </Button>
           </form>
-          <button className="mt-5 text-[14px] text-mute hover:text-bone" onClick={() => { setMode(mode === "login" ? "link" : "login"); setMsg(null); }}>
-            {mode === "login" ? "כניסה ראשונה או ששכחת סיסמה?" : "חזרה לכניסה עם סיסמה"}
-          </button>
+          <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-[14px] text-mute">
+            {mode !== "login" && <button className="hover:text-bone" onClick={() => { setMode("login"); setMsg(null); }}>חזרה לכניסה</button>}
+            {mode !== "signup" && <button className="hover:text-bone" onClick={() => { setMode("signup"); setMsg(null); }}>כניסה ראשונה? פתיחת חשבון</button>}
+            {mode !== "link" && <button className="hover:text-bone" onClick={() => { setMode("link"); setMsg(null); }}>שכחתי סיסמה</button>}
+          </div>
         </Card>
       </div>
     </div>
