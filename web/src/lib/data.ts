@@ -37,6 +37,10 @@ const q = <T,>(key: unknown[], fn: () => PromiseLike<{ data: unknown; error: { m
 export const usePartners = () => q<Partner[]>(["partners"], () => supabase.from("partners").select("id,name,email,user_id").order("name"));
 export const useProjects = () => q<Project[]>(["projects"], () => supabase.from("projects").select("*,clients(name)").order("name"));
 export const useFinancials = () => q<Financials[]>(["financials"], () => supabase.from("project_financials").select("*"));
+export type PartnerSummary = { partner_id: string; name: string; invested: number; profit_share: number; due: number; received: number; balance: number };
+export type BusinessSummary = { income: number; project_expenses: number; general_expenses: number; profit: number };
+export const usePartnerSummary = () => q<PartnerSummary[]>(["balances", "partners"], () => supabase.from("partner_summary").select("*"));
+export const useBusinessSummary = () => q<BusinessSummary>(["balances", "business"], () => supabase.from("business_summary").select("*").single());
 export const useBalances = () => q<Balance[]>(["balances"], () => supabase.from("partner_balances").select("*"));
 export const useShares = () => q<Share[]>(["shares"], () => supabase.from("project_profit_shares").select("*"));
 export const useExpenses = () => q<Expense[]>(["expenses"], () =>

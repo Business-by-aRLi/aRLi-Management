@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  useBalances, useExpenses, useIdeas, useIncome, useMeetings, useProjects, useRemove, useSave, useTasks, useTime, useWorkPlans,
+  useBusinessSummary, usePartnerSummary, useExpenses, useIdeas, useIncome, useMeetings, useProjects, useRemove, useSave, useTasks, useTime, useWorkPlans,
   type Idea, type WorkPlan,
 } from "../lib/data";
 import { money, today } from "../lib/format";
@@ -181,23 +181,16 @@ function IdeasBoard({ ideas, meId }: { ideas: Idea[]; meId?: string }) {
   );
 }
 
-// The partner balance: calm, with the numbers behind it.
+// The settlement, between three parties: the business, Miri and Riki. Nobody "holds" money:
+// each partner invested, the business made a profit, and each partner received money.
 export function BalanceModule() {
-  const balances = useBalances();
-  const expenses = useExpenses();
-  const income = useIncome();
+  const partners = usePartnerSummary();
+  const business = useBusinessSummary();
   const [settle, setSettle] = useState(false);
-  const rows = balances.data ?? [];
-  const owes = rows.find((b) => b.net_position > 0.005);
-  const owed = rows.find((b) => b.net_position < -0.005);
-  const m = today().slice(0, 7);
-  const monthExp = (expenses.data ?? []).filter((e) => e.spent_on.startsWith(m)).reduce((s, e) => s + Number(e.amount), 0);
-  const monthInc = (income.data ?? []).filter((e) => e.received_on.startsWith(m)).reduce((s, e) => s + Number(e.amount), 0);
-  const max = Math.max(1, ...rows.flatMap((r) => [Math.abs(r.entitled), Math.abs(r.held)]));
-  // General business expenses (not tied to a project) are split equally. Show it so the math is visible.
-  const general = (expenses.data ?? []).filter((e) => !e.project_id);
-  const generalTotal = general.reduce((s, e) => s + Number(e.amount), 0);
-  const generalBy = (id: string) => general.filter((e) => e.paid_by_partner_id === id).reduce((s, e) => s + Number(e.amount), 0);
+  const rows = partners.data ?? [];
+  const biz = business.data;
+  const gets = rows.find((r) => r.balance > 0.005);   // still has money coming to her
+  const gives = rows.find((r) => r.balance < -0.005); // received more than her part
 
   return (
     <Card>
@@ -206,34 +199,48 @@ export function BalanceModule() {
         <Link to="/money" className="text-[15px] text-pink hover:text-pink-soft">לכספים ←</Link>
       </div>
       <p className="mb-5 text-[15px] text-mute">
-        {owes && owed ? <>כדי להתאזן, {owes.name} מעבירה ל{owed.name} <span className="text-bone"><Num>{money(owes.net_position)}</Num></span>.</> : "אתן מאוזנות. אין מה להעביר."}
+        {gets && gives ? <>כדי להתאזן, {gives.name} מעבירה ל{gets.name} <span className="text-bone"><Num>{money(gets.balance)}</Num></span>.</> : "אתן מאוזנות. אין מה להעביר."}
       </p>
-      {rows.map((r) => (
-        <div key={r.partner_id} className="mb-4">
-          <div className="mb-1.5 flex justify-between text-[15px]"><span className="font-medium">{r.name}</span>
-            <span className="text-mute">מגיע <Num>{money(r.entitled)}</Num> · מחזיקה <Num>{money(r.held)}</Num></span></div>
-          <div className="space-y-1">
-            <div className="h-1.5 rounded-full bg-[var(--ink-3)]"><div className="h-full rounded-full bg-pink" style={{ width: `${(Math.max(0, r.entitled) / max) * 100}%` }} /></div>
-            <div className="h-1.5 rounded-full bg-[var(--ink-3)]"><div className="h-full rounded-full bg-bone/40" style={{ width: `${(Math.max(0, r.held) / max) * 100}%` }} /></div>
-          </div>
-        </div>
-      ))}
-      {generalTotal > 0 && (
-        <div className="mt-5 rounded-2xl bg-[var(--ink-3)]/60 px-4 py-3 text-[14px] text-mute">
-          <p><span className="text-bone">הוצאות כלליות של העסק</span>, חצי-חצי: <Num>{money(generalTotal)}</Num>, כלומר <Num>{money(generalTotal / Math.max(1, rows.length))}</Num> לכל אחת.</p>
-          <p className="mt-1">{rows.map((r) => <span key={r.partner_id} className="me-4">{r.name} שילמה <Num>{money(generalBy(r.partner_id))}</Num></span>)}</p>
-          <p className="mt-1 text-[13px] text-mute-2">זה כבר נכלל בחישוב למעלה.</p>
+
+      {biz && (
+        <div className="mb-5 rounded-2xl bg-[var(--ink-3)]/60 px-4 py-3">
+          <div className="flex items-baseline justify-between"><span className="font-medium">העסק</span>
+            <span className="text-[13px] text-mute">רווח כולל</span></div>
+          <div className={`mt-1 text-[28px] font-semibold ${biz.profit < 0 ? "text-error" : ""}`}><Num>{money(biz.profit)}</Num></div>
+          <p className="mt-1 text-[13px] text-mute">
+            הכנסות <Num>{money(biz.income)}</Num> · הוצאות פרויקטים <Num>{money(biz.project_expenses)}</Num> · השקעות כלליות <Num>{money(biz.general_expenses)}</Num>
+          </p>
         </div>
       )}
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-4 text-[14px] text-mute">
-        <span>החודש: נכנס <Num>{money(monthInc)}</Num> · יצא <Num>{money(monthExp)}</Num></span>
-        {owes && owed && <Button variant="ghost" className="!py-1.5 text-[14px]" onClick={() => setSettle(true)}>רישום התחשבנות</Button>}
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        {rows.map((r) => (
+          <div key={r.partner_id} className="rounded-2xl border border-[var(--line)] px-4 py-3 text-[14px]">
+            <p className="mb-2 text-[16px] font-medium">{r.name}</p>
+            <Line label="השקיעה" value={r.invested} />
+            <Line label="חלקה ברווח" value={r.profit_share} />
+            <Line label="קיבלה" value={r.received} />
+            <div className="mt-2 flex justify-between border-t border-[var(--line)] pt-2">
+              <span className="text-mute">{r.balance > 0.005 ? "עוד מגיע לה" : r.balance < -0.005 ? "קיבלה מעבר לחלקה" : "מאוזנת"}</span>
+              <Num className={r.balance > 0.005 ? "text-pink" : ""}>{money(Math.abs(r.balance))}</Num>
+            </div>
+          </div>
+        ))}
       </div>
-      <Modal open={settle} onClose={() => setSettle(false)} title="רישום התחשבנות">
-        <SettlementForm from={owes?.partner_id} to={owed?.partner_id} amount={owes?.net_position} onDone={() => setSettle(false)} />
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-[13px] text-mute-2">
+        <span>הוצאות כלליות נחשבות השקעה בעסק ומתחלקות חצי-חצי. רווח מפרויקט מתחלק לפי החלוקה שלו.</span>
+        {gets && gives && <Button variant="ghost" className="!py-1.5 text-[14px]" onClick={() => setSettle(true)}>רישום העברה</Button>}
+      </div>
+      <Modal open={settle} onClose={() => setSettle(false)} title="רישום העברה בין השותפות">
+        <SettlementForm from={gives?.partner_id} to={gets?.partner_id} amount={gets?.balance} onDone={() => setSettle(false)} />
       </Modal>
     </Card>
   );
+}
+
+function Line({ label, value }: { label: string; value: number }) {
+  return <div className="flex justify-between py-0.5"><span className="text-mute">{label}</span><Num>{money(value)}</Num></div>;
 }
 
 function Upcoming() {

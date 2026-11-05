@@ -462,12 +462,16 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
       return { ok: true, project: project.name };
     }
     case "get_balance": {
-      const rows = check(await db.from("partner_balances").select("*")) as { name: string; entitled: number; held: number; net_position: number }[];
-      const owes = rows.find((r) => r.net_position > 0.005);
-      const owed = rows.find((r) => r.net_position < -0.005);
+      // Three parties: the business, Miri and Riki. Nobody "holds" money.
+      const rows = check(await db.from("partner_summary").select("name,invested,profit_share,received,balance")) as { name: string; invested: number; profit_share: number; received: number; balance: number }[];
+      const business = check(await db.from("business_summary").select("*").single());
+      const gets = rows.find((r) => r.balance > 0.005);
+      const gives = rows.find((r) => r.balance < -0.005);
       return {
+        business,
         partners: rows,
-        summary: owes && owed ? `${owes.name} חייבת ל${owed.name} ${fmtMoney(owes.net_position)}` : "אתן מאוזנות",
+        explain: "invested = expenses she paid (general costs are an investment, split 50/50); profit_share = her share of the business profit; received = money that reached her; balance > 0 = still coming to her. Never say a partner 'holds' money.",
+        summary: gets && gives ? `כדי להתאזן, ${gives.name} מעבירה ל${gets.name} ${fmtMoney(gets.balance)}` : "אתן מאוזנות",
       };
     }
     case "list_projects": {
