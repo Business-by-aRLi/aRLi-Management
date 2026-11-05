@@ -4,11 +4,11 @@ import {
   type Expense, type Income, type RecurringCost,
 } from "../lib/data";
 import { date, money } from "../lib/format";
-import { Button, Card, Empty, ErrorNote, Field, Input, Loading, Modal, Num, PageTitle, Select } from "../components/ui";
+import { Button, Card, Empty, ErrorNote, Field, IconButton, Input, Loading, Modal, MonthSelect, Num, PageTitle, Segmented, Select, useConfirm } from "../components/ui";
 import { ExpenseForm, IncomeForm, SettlementForm } from "../components/forms";
 
 type Tab = "expenses" | "income" | "settlements" | "recurring";
-const TABS: [Tab, string][] = [["expenses", "הוצאות"], ["income", "הכנסות"], ["settlements", "התחשבנויות"], ["recurring", "עלויות שוטפות"]];
+const TABS: [Tab, string][] = [["expenses", "הוצאות"], ["income", "הכנסות"], ["settlements", "התחשבנויות"], ["recurring", "שוטפות"]];
 
 export default function Money() {
   const [tab, setTab] = useState<Tab>("expenses");
@@ -25,12 +25,7 @@ export default function Money() {
         </div>
       } />
 
-      <div className="mb-6 flex gap-1 overflow-x-auto">
-        {TABS.map(([k, l]) => (
-          <button key={k} onClick={() => setTab(k)}
-            className={`whitespace-nowrap rounded-full px-4 py-1.5 text-[15px] font-medium ${tab === k ? "bg-[var(--ink-3)] text-bone shadow-[inset_0_0_0_1px_var(--line-2)]" : "text-mute hover:text-bone"}`}>{l}</button>
-        ))}
-      </div>
+      <div className="mb-6"><Segmented label="סוג תנועה" value={tab} onChange={setTab} options={TABS} /></div>
 
       {tab === "expenses" && <ExpensesList onEdit={(row) => setModal({ kind: "expenses", row })} />}
       {tab === "income" && <IncomeList onEdit={(row) => setModal({ kind: "income", row })} />}
@@ -59,16 +54,16 @@ function Filters({ projectId, setProjectId, partnerId, setPartnerId, month, setM
   const projects = useProjects();
   const partners = usePartners();
   return (
-    <div className="mb-4 grid gap-3 sm:grid-cols-3">
-      <Select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+    <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <Select aria-label="פרויקט" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
         <option value="">כל הפרויקטים</option><option value="none">כללי לעסק</option>
         {projects.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
       </Select>
-      <Select value={partnerId} onChange={(e) => setPartnerId(e.target.value)}>
+      <Select aria-label="שותפה" value={partnerId} onChange={(e) => setPartnerId(e.target.value)}>
         <option value="">שתיהן</option>
         {partners.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
       </Select>
-      <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+      <div className="col-span-2 sm:col-span-1"><MonthSelect value={month} onChange={setMonth} /></div>
     </div>
   );
 }
@@ -76,6 +71,7 @@ function Filters({ projectId, setProjectId, partnerId, setPartnerId, month, setM
 function ExpensesList({ onEdit }: { onEdit: (r: Expense) => void }) {
   const { data, isLoading, error } = useExpenses();
   const remove = useRemove("expenses");
+  const confirm = useConfirm();
   const [projectId, setProjectId] = useState(""); const [partnerId, setPartnerId] = useState(""); const [month, setMonth] = useState("");
   const rows = useMemo(() => (data ?? []).filter((r) =>
     (!projectId || (projectId === "none" ? !r.project_id : r.project_id === projectId)) &&
@@ -89,20 +85,13 @@ function ExpensesList({ onEdit }: { onEdit: (r: Expense) => void }) {
       <Total rows={rows} />
       {!rows.length && <Empty>אין הוצאות. אפשר להוסיף כאן או לשלוח לבוט צילום חשבונית.</Empty>}
       {rows.map((r) => (
-        <div key={r.id} className="row-line grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 py-3 sm:grid-cols-[90px_1fr_auto_auto]">
-          <span className="text-[14px] text-mute"><Num>{date(r.spent_on)}</Num></span>
-          <span>
-            {r.description}
-            <span className="text-mute"> · {r.projects?.name ?? "כללי"} · שילמה {r.partners?.name ?? "?"}</span>
-            {r.reference && <span className="text-mute-2"> · <Num>#{r.reference}</Num></span>}
-          </span>
-          <span className="font-medium"><Num>{money(r.amount)}</Num></span>
-          <span className="flex gap-1">
-            {r.receipt_path && <Button variant="quiet" onClick={async () => { const u = await receiptUrl(r.receipt_path!); if (u) window.open(u, "_blank"); }}>קבלה</Button>}
-            <Button variant="quiet" onClick={() => onEdit(r)}>עריכה</Button>
-            <Button variant="quiet" onClick={() => confirm("למחוק את ההוצאה?") && remove.mutate(r.id)}>מחיקה</Button>
-          </span>
-        </div>
+        <Row key={r.id} date={r.spent_on} amount={r.amount} onEdit={() => onEdit(r)}
+          title={r.description}
+          meta={<>{r.projects?.name ?? "כללי"} · שילמה {r.partners?.name ?? "?"}{r.reference && <> · <Num>#{r.reference}</Num></>}</>}
+          actions={<>
+            {r.receipt_path && <IconButton icon="receipt" label="פתיחת הקבלה" onClick={async () => { const u = await receiptUrl(r.receipt_path!); if (u) window.open(u, "_blank"); }} />}
+            <IconButton icon="trash" label="מחיקת ההוצאה" onClick={async () => (await confirm({ title: "למחוק את ההוצאה?", body: `${r.description}, ${money(r.amount)}` })) && remove.mutate(r.id)} />
+          </>} />
       ))}
     </Card>
   );
@@ -111,6 +100,7 @@ function ExpensesList({ onEdit }: { onEdit: (r: Expense) => void }) {
 function IncomeList({ onEdit }: { onEdit: (r: Income) => void }) {
   const { data, isLoading, error } = useIncome();
   const remove = useRemove("income");
+  const confirm = useConfirm();
   const [projectId, setProjectId] = useState(""); const [partnerId, setPartnerId] = useState(""); const [month, setMonth] = useState("");
   const rows = useMemo(() => (data ?? []).filter((r) =>
     (!projectId || (projectId === "none" ? !r.project_id : r.project_id === projectId)) &&
@@ -123,15 +113,10 @@ function IncomeList({ onEdit }: { onEdit: (r: Income) => void }) {
       <Total rows={rows} />
       {!rows.length && <Empty>עוד אין הכנסות רשומות.</Empty>}
       {rows.map((r) => (
-        <div key={r.id} className="row-line grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 py-3 sm:grid-cols-[90px_1fr_auto_auto]">
-          <span className="text-[14px] text-mute"><Num>{date(r.received_on)}</Num></span>
-          <span>{r.projects?.name ?? "בלי פרויקט"}<span className="text-mute"> · התקבל אצל {r.partners?.name ?? "?"}{r.method ? ` · ${r.method}` : ""}</span></span>
-          <span className="font-medium text-pink-soft"><Num>{money(r.amount)}</Num></span>
-          <span className="flex gap-1">
-            <Button variant="quiet" onClick={() => onEdit(r)}>עריכה</Button>
-            <Button variant="quiet" onClick={() => confirm("למחוק את ההכנסה?") && remove.mutate(r.id)}>מחיקה</Button>
-          </span>
-        </div>
+        <Row key={r.id} date={r.received_on} amount={r.amount} positive onEdit={() => onEdit(r)}
+          title={r.projects?.name ?? "בלי פרויקט"}
+          meta={<>התקבל אצל {r.partners?.name ?? "?"}{r.method ? ` · ${r.method}` : ""}</>}
+          actions={<IconButton icon="trash" label="מחיקת ההכנסה" onClick={async () => (await confirm({ title: "למחוק את ההכנסה?", body: money(r.amount) })) && remove.mutate(r.id)} />} />
       ))}
     </Card>
   );
@@ -141,6 +126,7 @@ function SettlementsList() {
   const { data, isLoading } = useSettlements();
   const partners = usePartners();
   const remove = useRemove("settlements");
+  const confirm = useConfirm();
   const name = (id: string) => partners.data?.find((p) => p.id === id)?.name ?? "?";
   if (isLoading) return <Loading />;
   return (
@@ -151,7 +137,7 @@ function SettlementsList() {
           <span className="text-[14px] text-mute"><Num>{date(r.settled_on)}</Num></span>
           <span className="flex-1">{name(r.from_partner_id)} העבירה ל{name(r.to_partner_id)}{r.notes && <span className="text-mute"> · {r.notes}</span>}</span>
           <span className="font-medium"><Num>{money(r.amount)}</Num></span>
-          <Button variant="quiet" onClick={() => confirm("למחוק?") && remove.mutate(r.id)}>מחיקה</Button>
+          <IconButton icon="trash" label="מחיקת ההתחשבנות" onClick={async () => (await confirm({ title: "למחוק את ההתחשבנות?", body: money(r.amount) })) && remove.mutate(r.id)} />
         </div>
       ))}
     </Card>
@@ -172,11 +158,10 @@ function RecurringList({ onEdit, onAdd }: { onEdit: (r: RecurringCost) => void; 
       <p className="mb-4 text-[14px] text-mute-2">זו רשימה לתכנון. כל תשלום בפועל נרשם כהוצאה רגילה, כדי שייכנס למאזן.</p>
       {!data?.length && <Empty>למשל מנויים ל-Supabase, Lovable, דומיינים.</Empty>}
       {data?.map((r) => (
-        <div key={r.id} className={`row-line flex items-center justify-between gap-4 py-3 ${r.active ? "" : "opacity-50"}`}>
+        <button key={r.id} onClick={() => onEdit(r)} className={`row-line row-btn flex w-[calc(100%+20px)] items-center justify-between gap-4 py-3 text-start ${r.active ? "" : "opacity-50"}`}>
           <span className="flex-1">{r.name}<span className="text-mute"> · {r.frequency === "yearly" ? "שנתי" : "חודשי"} · משלמת {partners.data?.find((p) => p.id === r.paid_by_partner_id)?.name ?? "?"}</span></span>
           <span className="font-medium"><Num>{money(r.amount)}</Num></span>
-          <Button variant="quiet" onClick={() => onEdit(r)}>עריכה</Button>
-        </div>
+        </button>
       ))}
     </Card>
   );
@@ -219,4 +204,23 @@ function RecurringForm({ row, onDone }: { row?: RecurringCost; onDone: () => voi
 function Total({ rows }: { rows: { amount: number }[] }) {
   const total = rows.reduce((s, r) => s + Number(r.amount), 0);
   return <p className="mb-2 text-[15px] text-mute"><Num>{rows.length}</Num> תנועות · סה״כ <span className="text-bone"><Num>{money(total)}</Num></span></p>;
+}
+
+// One money row: tap anywhere to edit; the receipt and delete stay as quiet icons at the end.
+function Row({ date: d, title, meta, amount, positive, onEdit, actions }: {
+  date: string; title: string; meta: React.ReactNode; amount: number; positive?: boolean; onEdit: () => void; actions: React.ReactNode;
+}) {
+  return (
+    <div className="row-line flex items-center gap-2">
+      <button onClick={onEdit} title="עריכה" className="row-btn grid min-w-0 flex-1 grid-cols-[1fr_auto] items-center gap-x-4 py-3 text-start sm:grid-cols-[78px_1fr_auto]">
+        <span className="order-2 col-span-2 text-[13px] text-mute sm:order-none sm:col-span-1 sm:text-[14px]"><Num>{date(d)}</Num></span>
+        <span className="min-w-0">
+          <span className="block truncate">{title}</span>
+          <span className="block truncate text-[14px] text-mute">{meta}</span>
+        </span>
+        <span className={`font-medium ${positive ? "text-pink-soft" : ""}`}><Num>{positive ? "+" : ""}{money(amount)}</Num></span>
+      </button>
+      <span className="flex shrink-0">{actions}</span>
+    </div>
+  );
 }
