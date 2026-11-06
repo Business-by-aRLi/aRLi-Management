@@ -46,7 +46,7 @@ Deno.serve(async (req) => {
 
   // Context for the model: the real project list (to guess the project) and categories already in use.
   const [projects, cats] = await Promise.all([
-    db.from("projects").select("id,name,type,status,clients(name)").neq("status", "closed"),
+    db.from("projects").select("id,name,type,status,clients(name)").not("status", "in", "(archived,closed,paused)"),
     db.from("expenses").select("category").not("category", "is", null).limit(500),
   ]);
   // deno-lint-ignore no-explicit-any

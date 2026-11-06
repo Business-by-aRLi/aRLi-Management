@@ -122,6 +122,95 @@ export function useSaveShares() {
   });
 }
 
+export type InfraService = {
+  id: string; project_id: string; provider: string; name: string; plan: string | null; resource_ref: string | null;
+  monthly_cost: number; currency: "USD" | "ILS"; share_percent: number; renews_on: string | null; active: boolean;
+  notes: string | null; usage_note: string | null; usage_synced_at: string | null; created_at: string;
+};
+export type InfraCost = { id: string; service_id: string; month: string; amount: number; source: string; usage_note: string | null; synced_at: string | null };
+export type InfraMonthly = { project_id: string; month: string; currency: "USD" | "ILS"; amount: number; has_actual: boolean };
+export type InfraSyncLast = { at: string; report: Record<string, string>; errors: string[] } | null;
+export const useInfraServices = () => q<InfraService[]>(["infra", "services"], () => supabase.from("infra_services").select("*").order("created_at"));
+export const useInfraCosts = () => q<InfraCost[]>(["infra", "costs"], () => supabase.from("infra_costs").select("*").order("month", { ascending: false }));
+export const useInfraMonthly = () => q<InfraMonthly[]>(["infra", "monthly"], () => supabase.from("project_infra_monthly").select("*").order("month"));
+export const useInfraSyncLast = () => q<InfraSyncLast>(["infra", "last"], () => supabase.rpc("infra_sync_last"));
+
+export function useInfraSync() {
+  const qc = useQueryClient();
+  return useMutation({
+    // gmail: also look for new Supabase invoices in the connected mailboxes (the daily run always does).
+    // full: go back 12 months (history) instead of the last two.
+    mutationFn: async (opts?: { gmail?: boolean; full?: boolean }) => {
+      const { data, error } = await supabase.functions.invoke("infra-sync", { body: { gmail: !!opts?.gmail, full: !!opts?.full } });
+      if (error) throw new Error(error.message);
+      return data as { ok: boolean; report: Record<string, string>; errors: string[] };
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["infra"] }),
+  });
+}
+
+export type Connector = {
+  provider: string; key_hint: string | null; extra: Record<string, string>; connected_at: string;
+  checked_at: string | null; check_ok: boolean | null; check_message: string | null; partners?: { name: string } | null;
+};
+export type ProviderResource = { id: string; name: string };
+export const useConnectors = () => q<Connector[]>(["infra", "connectors"], () =>
+  supabase.from("infra_connectors").select("provider,key_hint,extra,connected_at,checked_at,check_ok,check_message,partners:connected_by(name)"));
+
+// Lists the provider's projects / workspaces through the sync function (also tests the key).
+export function useProviderResources(provider: string, enabled: boolean) {
+  return useQuery<ProviderResource[]>({
+    queryKey: ["infra", "resources", provider],
+    enabled,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+    queryFn: async () => {
+      const { data, error } = await supabase.functions.invoke("infra-sync", { body: { action: "resources", provider } });
+      if (error) throw new Error(error.message);
+      if (!data?.ok) throw new Error(data?.error ?? "החיבור נכשל");
+      return data.resources as ProviderResource[];
+    },
+  });
+}
+
+export type InvoiceImport = { source_key: string; month: string | null; total: number | null; currency: string | null; imported_at: string;
+  result: { matched?: number; unmatched?: { name: string; amount: number }[]; skipped?: string } | null };
+export const useInvoiceImports = () => q<InvoiceImport[]>(["infra", "invoices"], () =>
+  supabase.from("infra_invoice_imports").select("*").not("month", "is", null).order("imported_at", { ascending: false }).limit(5));
+
+// Uploads a Supabase invoice and has the sync function file each project's amount.
+export function useSupabaseInvoiceUpload() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const safe = file.name.replace(/[^\w.\-]+/g, "_").slice(-80) || "invoice.pdf";
+      const path = `infra/supabase/${Date.now()}-${safe}`;
+      must(await supabase.storage.from("receipts").upload(path, file, { contentType: file.type }));
+      const { data, error } = await supabase.functions.invoke("infra-sync", { body: { action: "supabase_invoice", path } });
+      if (error) throw new Error(error.message);
+      if (!data?.ok) throw new Error(data?.error ?? "קריאת החשבונית נכשלה");
+      return data as { month: string; matched: number; unmatched: { name: string; amount: number }[] };
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["infra"] }),
+  });
+}
+
+export function useConnectorActions() {
+  const qc = useQueryClient();
+  const done = () => qc.invalidateQueries({ queryKey: ["infra"] });
+  return {
+    save: useMutation({
+      mutationFn: async (v: { provider: string; key: string; extra: Record<string, string> }) =>
+        must(await supabase.rpc("connector_save", { p_provider: v.provider, p_key: v.key, p_extra: v.extra })),
+      onSuccess: done,
+    }),
+    remove: useMutation({
+      mutationFn: async (provider: string) => must(await supabase.rpc("connector_remove", { p_provider: provider })),
+      onSuccess: done,
+    }),
+  };
+}
+
 export async function receiptUrl(path: string) {
   const { data } = await supabase.storage.from("receipts").createSignedUrl(path, 60 * 10);
   return data?.signedUrl;
