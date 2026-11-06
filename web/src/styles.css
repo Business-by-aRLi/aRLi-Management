@@ -21,6 +21,8 @@
   --pink-soft: #F08AB3;
   --error: #F48AB3;
   --on-pink: #0C0B10;
+  --who-1: #A78BFA;
+  --who-2: #2DD4BF;
   --scrim: rgba(4, 3, 8, .62);
   --core-shine: rgba(255, 255, 255, .06);
   --nav-shadow: 0 20px 50px -20px rgba(4, 3, 8, .7);
@@ -55,6 +57,8 @@
   --pink-soft: #AD1F5C;
   --error: #B0204F;
   --on-pink: #FFFFFF;
+  --who-1: #6D4FD8;
+  --who-2: #0E8577;
   --scrim: rgba(22, 20, 27, .38);
   --core-shine: rgba(255, 255, 255, .9);
   --nav-shadow: 0 18px 40px -22px rgba(60, 40, 60, .35);

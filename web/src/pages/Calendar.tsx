@@ -10,9 +10,10 @@ import {
   findFreeSlots, useBusy, useGoogleConnections, useMeetings, usePartners, useRemove, useRituals, useSave, useSyncStatus, useTasks,
   type Busy, type Meeting, type MeetingKind, type Partner, type Slot, type Task,
 } from "../lib/data";
-import { Button, Card, Field, IconButton, Modal, Num, PageTitle, Segmented, Select, useConfirm } from "../components/ui";
+import { Button, Card, Eyebrow, Field, IconButton, Modal, Num, Segmented, Select, useConfirm } from "../components/ui";
 import { Icon, type IconName } from "../components/icons";
 import { MeetingForm, useMe } from "../components/forms";
+import { hebDay, hebDayMonth, hebFull, hebRange, holidaysOn, isChag, type Holiday } from "../lib/jewish";
 
 const BOT = "https://t.me/aRLi_Management_bot";
 const DAYS = ["א׳", "ב׳", "ג׳", "ד׳", "ה׳", "ו׳", "ש׳"];
@@ -149,11 +150,11 @@ const Kbd = ({ children }: { children: React.ReactNode }) => (
 );
 
 // One line of momentum above the calendar: what is built into this period, and one invitation when it is empty.
-function Momentum({ period, focusH, meetings, due, onBlock }: { period: string; focusH: number; meetings: number; due: number; onBlock: () => void }) {
+function Momentum({ period, focusH, meetings, due, onBlock, compact }: { period: string; focusH: number; meetings: number; due: number; onBlock: () => void; compact?: boolean }) {
   const chip = "inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[13px] shadow-[inset_0_0_0_1px_var(--line)] sm:gap-2 sm:px-3.5 sm:py-1.5 sm:text-[14px]";
   return (
     <div className="no-scrollbar -mx-[var(--gutter)] flex items-center gap-2 overflow-x-auto px-[var(--gutter)] sm:mx-0 sm:flex-wrap sm:px-0" aria-label={`${period} ביומן`}>
-      <span className="shrink-0 text-[14px] font-medium text-mute">{period}:</span>
+      <span className={`shrink-0 text-[14px] font-medium text-mute ${compact ? "sr-only" : ""}`}>{period}:</span>
       <span className={chip}><Icon name="focus" size={15} className="text-pink-soft" /><Num>{focusH}</Num> שעות עבודה ממוקדת</span>
       <span className={chip}><Icon name="meeting" size={15} className="text-pink-soft" /><Num>{meetings}</Num> פגישות</span>
       {due > 0 && <span className={chip}><Icon name="flag" size={15} className="text-pink-soft" /><Num>{due}</Num> דדליינים</span>}
@@ -229,6 +230,8 @@ export default function CalendarPage() {
       ? anchor.toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" })
       : `${range.from.toLocaleDateString("he-IL", { day: "numeric", month: "long" })} – ${addDays(range.from, range.days - 1).toLocaleDateString("he-IL", { day: "numeric", month: "long" })}`;
   const isToday = view === "day" && ymd(anchor) === ymd(new Date());
+  const blockNew = () => setDraft({ kind: "focus", startsAt: `${ymd(anchor.getTime() < Date.now() ? new Date() : anchor)}T09:00` });
+  const hebLabel = view === "day" ? hebFull(anchor) : view === "month" ? hebRange(new Date(anchor.getFullYear(), anchor.getMonth(), 1), new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0)) : hebRange(range.from, addDays(range.from, range.days - 1));
   const todayMs = dayStart(new Date()).getTime();
   const onToday = todayMs >= range.from.getTime() && todayMs < new Date(toIso).getTime() && (view !== "month" || anchor.getMonth() === new Date().getMonth());
   const phoneTitle = view === "day"
@@ -282,11 +285,15 @@ export default function CalendarPage() {
   });
 
   return (
-    <div className="space-y-4 sm:space-y-6">
+    // Desktop (lg): the page is exactly one screen tall; only the calendar body scrolls inside it.
+    <div className="space-y-4 sm:space-y-6 lg:-mt-8 lg:flex lg:h-[calc(100dvh-10rem)] lg:min-h-[560px] lg:flex-col lg:gap-3 lg:space-y-0">
       {/* Phone: one compact bar that stays on top while the day scrolls, with a week strip to jump between days. */}
       <div className="cal-bar sticky top-0 z-30 -mx-[var(--gutter)] -mt-8 px-[var(--gutter)] pb-2 sm:hidden">
         <div className="flex items-center justify-between gap-2">
-          <h1 aria-live="polite" className="min-w-0 truncate text-[22px] font-semibold leading-tight tracking-[-0.01em]">{phoneTitle}</h1>
+          <div className="min-w-0">
+            <h1 aria-live="polite" className="truncate text-[22px] font-semibold leading-tight tracking-[-0.01em]">{phoneTitle}</h1>
+            <p className="truncate text-[13px] text-mute">{hebLabel}{view === "day" && holidaysOn(ymd(anchor)).length ? ` · ${holidaysOn(ymd(anchor)).map((h) => h.name).join(", ")}` : ""}</p>
+          </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {!onToday && <button type="button" onClick={goToday} className="press h-10 rounded-full px-3.5 text-[14px] font-semibold text-bone shadow-[inset_0_0_0_1px_var(--line-2)]">היום</button>}
             <IconButton icon="plus" tone="pink" size={40} label="אירוע חדש" onClick={() => setDraft({ startsAt: `${ymd(anchor.getTime() < Date.now() ? new Date() : anchor)}T09:00` })} />
@@ -306,23 +313,30 @@ export default function CalendarPage() {
         )}
       </div>
 
-      <div className="hidden sm:block">
-      <PageTitle eyebrow="יומן משותף" title={<span aria-live="polite">{title}</span>} action={
+      {/* Tablet and desktop: title on one side, the period's momentum and the two actions on the other */}
+      <div className="hidden shrink-0 flex-wrap items-end justify-between gap-x-6 gap-y-3 sm:flex">
+        <div>
+          <Eyebrow>יומן משותף · {hebLabel}</Eyebrow>
+          <h1 aria-live="polite" className="mt-1 text-[clamp(28px,3vw,40px)] font-semibold leading-[1.1] tracking-[-0.015em]">{title}</h1>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div role="group" aria-label="מעבר בין תאריכים" className="inline-flex items-center rounded-full p-0.5 shadow-[inset_0_0_0_1px_var(--line-2)]">
-            <IconButton icon="chevronPrev" size={44} label={`הקודם (${peek(-1)})`} onClick={() => shift(-1)} />
-            <button type="button" onClick={goToday} aria-label="חזרה להיום"
-              className="press h-11 rounded-full px-4 text-[15px] font-semibold text-bone transition-colors duration-300 hover:bg-[var(--hover-veil)]">היום</button>
-            <IconButton icon="chevronNext" size={44} label={`הבא (${peek(1)})`} onClick={() => shift(1)} />
-          </div>
+          <div className="lg:hidden"><Momentum period={period} focusH={focusH} meetings={meetN} due={dueN} onBlock={blockNew} /></div>
           <Button variant="ghost" className="!py-2 text-[15px]" onClick={() => setFinder(true)}><Icon name="search" size={16} />מצאי זמן פנוי</Button>
           <Button arrow className="group" onClick={() => setDraft({ startsAt: `${ymd(anchor.getTime() < Date.now() ? new Date() : anchor)}T09:00` })}>אירוע חדש</Button>
         </div>
-      } />
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="sm:hidden"><Momentum period={period} focusH={focusH} meetings={meetN} due={dueN} onBlock={blockNew} /></div>
+
+      {/* The toolbar sits right on top of the calendar: move in time, pick a view, filter. */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
+          <div role="group" aria-label="מעבר בין תאריכים" className="hidden items-center rounded-full p-0.5 shadow-[inset_0_0_0_1px_var(--line-2)] sm:inline-flex">
+            <IconButton icon="chevronPrev" size={40} label={`הקודם (${peek(-1)})`} onClick={() => shift(-1)} />
+            <button type="button" onClick={goToday} aria-label="חזרה להיום"
+              className="press h-10 rounded-full px-4 text-[15px] font-semibold text-bone transition-colors duration-300 hover:bg-[var(--hover-veil)]">היום</button>
+            <IconButton icon="chevronNext" size={40} label={`הבא (${peek(1)})`} onClick={() => shift(1)} />
+          </div>
           <Segmented label="תצוגה" value={view} onChange={setView} options={[["day", "יום"], ["week", "שבוע"], ["month", "חודש"], ["agenda", "רשימה"]]} />
           <button type="button" onClick={() => setFilters(!filters)} aria-expanded={filters} aria-controls="cal-filters"
             className="press inline-flex h-10 items-center gap-1 rounded-full px-3 text-[14px] font-medium text-mute shadow-[inset_0_0_0_1px_var(--line)] hover:text-bone sm:hidden">
@@ -338,18 +352,17 @@ export default function CalendarPage() {
             תפוס מגוגל
           </label>
         </div>
-        <SyncBar partners={partners.data ?? []} />
+        <div className="lg:hidden"><SyncBar partners={partners.data ?? []} /></div>
+        <div className="hidden lg:block"><Momentum compact period={period} focusH={focusH} meetings={meetN} due={dueN} onBlock={blockNew} /></div>
         </div>
       </div>
 
-      <Momentum period={period} focusH={focusH} meetings={meetN} due={dueN} onBlock={() => setDraft({ kind: "focus", startsAt: `${ymd(anchor.getTime() < Date.now() ? new Date() : anchor)}T09:00` })} />
-
-      <div ref={swipe.ref} className="cal-swipe relative">
+      <div ref={swipe.ref} className="cal-swipe relative lg:min-h-0 lg:flex-1">
         <SwipePeek dx={swipe.dx} label={swipe.dx > 0 ? peek(1) : peek(-1)} />
-        <div style={{ transform: swipe.dx ? `translateX(${swipe.dx * 0.4}px)` : undefined, transition: swipe.dx ? "none" : "transform .3s var(--ease)" }}>
-        <div key={`${view}-${navKey}`} className={slide === "next" ? "cal-in-next" : slide === "prev" ? "cal-in-prev" : "animate-fade"}>
+        <div className="lg:h-full" style={{ transform: swipe.dx ? `translateX(${swipe.dx * 0.4}px)` : undefined, transition: swipe.dx ? "none" : "transform .3s var(--ease)" }}>
+        <div key={`${view}-${navKey}`} className={`lg:h-full ${slide === "next" ? "cal-in-next" : slide === "prev" ? "cal-in-prev" : "animate-fade"}`}>
       {(view === "week" || view === "day") && (
-        <div className="grid gap-6 lg:grid-cols-[1fr_260px]">
+        <div className="grid gap-6 lg:h-full lg:grid-cols-[1fr_260px] lg:grid-rows-[minmax(0,1fr)]">
           <WeekGrid days={Array.from({ length: range.days }, (_, i) => addDays(range.from, i))} onDayOpen={view === "week" ? (d) => { go(d, null); setView("day"); } : undefined} events={events} busy={busyShown}
             deadlines={deadlines} rituals={ritualDays} partners={partners.data ?? []}
             onSlot={(d) => setDraft({ startsAt: localInput(d) })} onOpen={setOpen} onMove={move}
@@ -366,11 +379,11 @@ export default function CalendarPage() {
         </div>
       </div>
 
-      <Legend />
-      <p className="text-[13px] text-mute">
-        <span className="lg:hidden">מחליקים ימינה לתקופה הבאה ושמאלה לקודמת.</span>
-        <span className="hidden lg:inline">קיצורים: <Kbd>←</Kbd> הבא, <Kbd>→</Kbd> הקודם, <Kbd>T</Kbd> היום, <Kbd>D</Kbd> יום, <Kbd>W</Kbd> שבוע, <Kbd>M</Kbd> חודש, <Kbd>L</Kbd> רשימה. אפשר גם להחליק בשתי אצבעות על משטח המגע.</span>
-      </p>
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-6 gap-y-2">
+        <Legend partners={partners.data ?? []} />
+        <div className="hidden lg:block"><SyncBar partners={partners.data ?? []} /></div>
+      </div>
+      <p className="text-[13px] text-mute lg:hidden">מחליקים ימינה לתקופה הבאה ושמאלה לקודמת.</p>
 
       <Modal open={!!draft} onClose={() => setDraft(null)} title={draft?.row ? "עריכת אירוע" : draft?.kind === "focus" ? "בלוק עבודה" : "אירוע חדש"}>
         {draft && <MeetingForm key={draft.row?.id ?? `${draft.startsAt}-${draft.taskId}`} row={draft.row} startsAt={draft.startsAt} endsAt={draft.endsAt}
@@ -402,8 +415,8 @@ function SyncBar({ partners }: { partners: Partner[] }) {
           : "Google Calendar עוד לא מחובר"}
       </span>
       {partners.map((p) => (
-        <span key={p.id} className={`rounded-full px-2.5 py-0.5 text-[13px] ${connected(p.id) ? "bg-pink/15 text-pink-soft" : "text-mute shadow-[inset_0_0_0_1px_var(--line-2)]"}`}>
-          {p.name}{connected(p.id) ? " ✓" : ""}
+        <span key={p.id} className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[13px] ${connected(p.id) ? "bg-pink/15 text-pink-soft" : "text-mute shadow-[inset_0_0_0_1px_var(--line-2)]"}`}>
+          <span className="size-2 rounded-full" style={{ background: whoColor(p.id, partners) }} aria-hidden />{p.name}{connected(p.id) ? " ✓" : ""}
         </span>
       ))}
       {!allOn && <a href={`${BOT}?start=google`} target="_blank" rel="noreferrer" className="text-pink hover:text-pink-soft">חיבור דרך הבוט ←</a>}
@@ -411,15 +424,34 @@ function SyncBar({ partners }: { partners: Partner[] }) {
   );
 }
 
-function Legend() {
+function Legend({ partners }: { partners: Partner[] }) {
   return (
     <div className="flex flex-wrap gap-4 text-[13px] text-mute">
       {(Object.keys(KIND) as MeetingKind[]).map((k) => (
         <span key={k} className="inline-flex items-center gap-1.5"><span className={`inline-block h-3 w-5 rounded-[4px] ${KIND[k].cls}`} />{KIND[k].label}</span>
       ))}
-      <span className="inline-flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded-[4px] bg-[var(--hover-veil)] shadow-[inset_0_0_0_1px_var(--line)]" />תפוס ביומן אישי</span>
+      {partners.map((p) => {
+        const c = whoColor(p.id, partners);
+        return (
+          <span key={p.id} className="inline-flex items-center gap-1.5" title={`תפוס ביומן הגוגל האישי של ${p.name}`}>
+            <span className="inline-block h-3 w-5 rounded-[4px]" style={{ background: `color-mix(in srgb, ${c} 16%, transparent)`, boxShadow: `inset -3px 0 0 ${c}` }} />{p.name}, יומן אישי
+          </span>
+        );
+      })}
       <span className="inline-flex items-center gap-1.5 text-pink-soft"><Icon name="flag" size={13} />דדליין</span>
       <span className="inline-flex items-center gap-1.5"><Icon name="rhythm" size={13} />טקס עסקי</span>
+    </div>
+  );
+}
+
+// Each partner's personal Google calendar has its own colour (tokens --who-1 / --who-2, light and dark).
+const whoColor = (id: string, partners: Partner[]) => `var(--who-${(Math.max(0, partners.findIndex((p) => p.id === id)) % 2) + 1})`;
+
+// A holiday line: quieter than events, a little brighter for a yom tov.
+function HolidayLine({ h, size = 12 }: { h: Holiday; size?: number }) {
+  return (
+    <div className={`flex items-center gap-1 truncate ${h.chag ? "font-medium text-bone" : "text-mute"}`} style={{ fontSize: size }}>
+      <Icon name="star" size={size} className="shrink-0 text-pink-soft" /><span className="truncate">{h.name}</span>
     </div>
   );
 }
@@ -502,17 +534,18 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
   }
 
   return (
-    <div className="bezel"><div className="core overflow-hidden !p-0">
-      <div className="[--cal-gutter:44px] sm:[--cal-gutter:56px]">
-        <div>
+    <div className="bezel lg:h-full lg:min-h-0"><div className="core flex min-h-0 flex-col overflow-hidden !p-0">
+      <div className="flex min-h-0 flex-1 flex-col [--cal-gutter:44px] sm:[--cal-gutter:56px]">
+        <div className="flex min-h-0 flex-1 flex-col">
           {/* day headers + all-day row */}
-          <div className="grid border-b border-[var(--line)]" style={cols}>
+          <div className="grid shrink-0 border-b border-[var(--line)]" style={cols}>
             <div />
             {days.map((d) => {
               const key = ymd(d);
               const allDay = events.filter((m) => m.all_day && ymd(new Date(m.starts_at)) <= key && ymd(new Date(endOf(m))) >= key);
               const due = deadlines.filter((t) => t.due_on === key);
               const rit = rituals.filter((r) => r.on === key);
+              const hol = holidaysOn(key);
               return (
                 <div key={key} className={`min-w-0 px-1 pb-1 pt-1 sm:pb-2 sm:pt-3 ${key === todayKey ? "bg-pink/[.06]" : ""}`}>
                   {(() => {
@@ -520,6 +553,7 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
                     const inner = (<>
                       <span className={key === todayKey ? "font-semibold text-pink-soft" : ""}>{single ? d.toLocaleDateString("he-IL", { weekday: "long" }) : DAYS[d.getDay()]}</span>
                       <span className={`inline-grid size-8 place-items-center rounded-full text-[15px] ${key === todayKey ? "bg-pink font-semibold text-on-pink" : "text-bone"}`}><Num>{d.getDate()}</Num></span>
+                      <span className="text-[11px] text-mute-2" aria-hidden>{single ? hebDayMonth(d) : hebDay(d)}</span>
                     </>);
                     const cls = `hidden sm:flex mx-auto mb-1.5 flex-col items-center gap-0.5 rounded-[12px] px-1 py-0.5 text-[13px] text-mute sm:flex-row sm:justify-center sm:gap-1.5 sm:text-[14px]`;
                     return onDayOpen
@@ -530,6 +564,7 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
                     {allDay.map((m) => (
                       <button key={m.id} onClick={() => onOpen(m)} aria-label={`${KIND[m.kind].label}, כל היום: ${m.title}`} className={`press block w-full truncate rounded-[6px] px-1.5 py-0.5 text-start text-[12px] ${KIND[m.kind].cls}`}>{m.title}</button>
                     ))}
+                    {hol.map((h) => <HolidayLine key={h.name} h={h} />)}
                     {rit.map((r) => <div key={r.id} className="flex items-center gap-1 truncate text-[12px] text-mute"><Icon name="rhythm" size={12} className="shrink-0" /><span className="truncate">{r.title}</span></div>)}
                     {due.map((t) => <Link key={t.id} to="/tasks" className="flex items-center gap-1 truncate text-[12px] text-pink-soft"><Icon name="flag" size={12} className="shrink-0" /><span className="truncate">{t.title}</span></Link>)}
                   </div>
@@ -538,7 +573,7 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
             })}
           </div>
           {/* time grid */}
-          <div ref={scroller} className="sm:max-h-[68vh] sm:overflow-y-auto">
+          <div ref={scroller} className="sm:max-h-[68vh] sm:overflow-y-auto lg:max-h-none lg:min-h-0 lg:flex-1">
             <div className="relative grid" style={{ ...cols, height: hours.length * HOUR_PX }}>
               <div className="relative">
                 {hours.map((h, i) => <div key={h} className="absolute inset-x-0 pe-1.5 text-end text-[12px] text-mute sm:pe-2" style={{ top: i * HOUR_PX - 8 }}>{i > 0 && <Num>{`${pad(h)}:00`}</Num>}</div>)}
@@ -553,7 +588,7 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
                 const pastH = key < todayKey ? hours.length * HOUR_PX : key === todayKey ? Math.max(0, Math.min(hours.length * HOUR_PX, nowTop)) : 0;
                 return (
                   <div key={key} data-day={key}
-                    className={`relative border-s border-[var(--line)] ${d.getDay() === 6 ? "bg-[var(--hover-veil)]" : key === todayKey ? "bg-pink/[.035]" : ""}`}
+                    className={`relative border-s border-[var(--line)] ${d.getDay() === 6 || isChag(key) ? "bg-[var(--hover-veil)]" : key === todayKey ? "bg-pink/[.035]" : ""}`}
                     style={{ backgroundImage: `repeating-linear-gradient(to bottom, var(--line) 0 1px, transparent 1px ${HOUR_PX}px)` }}
                     onClick={(e) => { if (e.target === e.currentTarget) onSlot(timeAt(d, e.nativeEvent.offsetY)); }}
                     onDragOver={(e) => { if (e.dataTransfer.types.includes("text/task")) e.preventDefault(); }}
@@ -569,9 +604,12 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
                       const e = Math.min(new Date(b.ends_at).getTime(), base.getTime() + hours.length * 3600e3);
                       if (e <= s) return null;
                       const name = partners.find((p) => p.id === b.partner_id)?.name ?? "";
+                      const c = whoColor(b.partner_id, partners);
                       return (
-                        <div key={i} className="pointer-events-none absolute inset-x-0.5 overflow-hidden rounded-[6px] bg-[var(--hover-veil)] px-1 text-[12px] leading-tight text-mute shadow-[inset_0_0_0_1px_var(--line)]"
-                          style={{ top: ((s - base.getTime()) / 3600e3) * HOUR_PX, height: ((e - s) / 3600e3) * HOUR_PX }}>תפוסה · {name}</div>
+                        <div key={i} className="pointer-events-none absolute inset-x-0.5 overflow-hidden rounded-[6px] px-1.5 pt-0.5 text-[12px] font-medium leading-tight"
+                          style={{ top: ((s - base.getTime()) / 3600e3) * HOUR_PX, height: ((e - s) / 3600e3) * HOUR_PX,
+                            background: `color-mix(in srgb, ${c} 16%, transparent)`, color: `color-mix(in srgb, ${c} 70%, var(--bone))`,
+                            boxShadow: `inset -3px 0 0 ${c}, inset 0 0 0 1px color-mix(in srgb, ${c} 30%, transparent)` }}>{name} · ביומן האישי</div>
                       );
                     })}
                     {placed.map(({ m, top, height, col, cols }) => {
@@ -614,7 +652,10 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
           </div>
         </div>
       </div>
-      <p className="border-t border-[var(--line)] px-4 py-2.5 text-[13px] text-mute">לחיצה על שעה פנויה יוצרת אירוע. גוררים אירוע כדי להזיז אותו{single ? "" : ", לחיצה על יום פותחת אותו"}. אפשר גם לפתוח אירוע ולשנות את השעה בטופס.</p>
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-[var(--line)] px-4 py-2 text-[13px] text-mute">
+      <p title="אפשר גם לפתוח אירוע ולשנות את השעה בטופס.">לחיצה על שעה פנויה יוצרת אירוע · גוררים אירוע כדי להזיז{single ? "" : " · לחיצה על יום פותחת אותו"}</p>
+      <p className="hidden lg:block" title="אפשר גם להחליק בשתי אצבעות על משטח המגע"><Kbd>←</Kbd><Kbd>→</Kbd> מעבר <Kbd>T</Kbd> היום <Kbd>D</Kbd><Kbd>W</Kbd><Kbd>M</Kbd><Kbd>L</Kbd> תצוגות</p>
+      </div>
     </div></div>
   );
 }
@@ -623,7 +664,7 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
 function TaskTray({ tasks, scheduled, onPick }: { tasks: Task[]; scheduled: Set<string>; onPick: (t: Task) => void }) {
   const list = tasks.filter((t) => !scheduled.has(t.id)).sort((a, b) => (a.due_on ?? "9999").localeCompare(b.due_on ?? "9999") || a.priority - b.priority).slice(0, 12);
   return (
-    <Card className="h-fit">
+    <Card className="h-fit lg:max-h-full lg:min-h-0 [&>.core]:min-h-0 [&>.core]:overflow-y-auto">
       <h2 className="text-[18px] font-semibold">לשבץ ביומן</h2>
       <p className="mb-3 mt-1 text-[14px] text-mute">משימה שיש לה זמן ביומן נעשית. גררי לשעה, או לחצי.</p>
       {!list.length && <p className="text-[14px] text-mute">כל המשימות הפתוחות כבר משובצות.</p>}
@@ -650,23 +691,28 @@ function MonthGrid({ from, month, events, deadlines, rituals, onDay, onOpen }: {
   const todayKey = ymd(new Date());
   const days = Array.from({ length: 42 }, (_, i) => addDays(from, i));
   return (
-    <Card>
+    <Card className="lg:h-full [&>.core]:flex [&>.core]:min-h-0 [&>.core]:flex-col">
       <div className="grid grid-cols-7 gap-1 text-center text-[14px] font-medium text-mute" aria-hidden>{DAYS.map((d) => <div key={d} className="py-1">{d}</div>)}</div>
-      <div className="grid grid-cols-7 gap-1">
+      <div className="grid grid-cols-7 gap-1 lg:min-h-0 lg:flex-1 lg:grid-rows-6">
         {days.map((d) => {
           const key = ymd(d);
           const list = events.filter((m) => ymd(new Date(m.starts_at)) === key || (m.all_day && ymd(new Date(m.starts_at)) <= key && ymd(new Date(endOf(m))) >= key));
           const due = deadlines.filter((t) => t.due_on === key);
           const rit = rituals.filter((r) => r.on === key);
+          const hol = holidaysOn(key);
           return (
             // The cell is clickable with a pointer; the date button is the keyboard and screen-reader way in,
             // so the event buttons inside are not nested in another button.
             <div key={key} onClick={() => onDay(d)}
-              className={`flex min-h-[64px] cursor-pointer flex-col items-start rounded-[12px] p-1.5 text-start transition-colors duration-300 hover:bg-[var(--hover-veil)] sm:min-h-[104px] ${key === todayKey ? "bg-pink/[.07] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--pink)_35%,transparent)]" : ""} ${d.getMonth() === month ? "" : "opacity-45"}`}>
+              className={`flex min-h-[64px] cursor-pointer flex-col items-start overflow-hidden rounded-[12px] p-1.5 text-start transition-colors duration-300 hover:bg-[var(--hover-veil)] sm:min-h-[104px] lg:min-h-0 ${key === todayKey ? "bg-pink/[.07] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--pink)_35%,transparent)]" : d.getDay() === 6 || isChag(key) ? "bg-[var(--hover-veil)]" : ""} ${d.getMonth() === month ? "" : "opacity-45"}`}>
+              <div className="flex w-full items-center justify-between gap-1">
               <button type="button" onClick={(e) => { e.stopPropagation(); onDay(d); }} aria-current={key === todayKey ? "date" : undefined}
-                aria-label={`${d.toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" })}${list.length ? `, ${list.length} אירועים` : ""}${due.length ? `, ${due.length} דדליינים` : ""}`}
+                aria-label={`${d.toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" })}, ${hebDayMonth(d)}${hol.length ? `, ${hol.map((h) => h.name).join(", ")}` : ""}${list.length ? `, ${list.length} אירועים` : ""}${due.length ? `, ${due.length} דדליינים` : ""}`}
                 className={`press inline-grid size-8 place-items-center rounded-full text-[14px] hover:bg-[var(--hover-veil)] ${key === todayKey ? "bg-pink font-semibold text-on-pink hover:bg-pink-hover" : ""}`}><Num>{d.getDate()}</Num></button>
+              <span aria-hidden className="ms-0.5 text-[11px] leading-none text-mute-2 sm:ms-1">{hebDay(d)}</span>
+              </div>
               <div className="mt-1 hidden w-full min-w-0 space-y-0.5 sm:block">
+                {hol.slice(0, 1).map((h) => <HolidayLine key={h.name} h={h} />)}
                 {list.slice(0, 3).map((m) => (
                   <button key={m.id} onClick={(e) => { e.stopPropagation(); onOpen(m); }} aria-label={`${KIND[m.kind].label}: ${m.title}${m.all_day ? ", כל היום" : `, ${hm(m.starts_at)}`}`} className={`block w-full truncate rounded-[5px] px-1 text-start text-[12px] ${KIND[m.kind].cls}`}>
                     {!m.all_day && <Num className="me-1 opacity-85">{hm(m.starts_at)}</Num>}{m.title}
@@ -680,6 +726,7 @@ function MonthGrid({ from, month, events, deadlines, rituals, onDay, onOpen }: {
                 {list.some((m) => m.kind === "meeting") && <span className="size-1.5 rounded-full bg-pink" />}
                 {list.some((m) => m.kind !== "meeting") && <span className="size-1.5 rounded-full bg-bone" />}
                 {due.length > 0 && <span className="size-1.5 rounded-full bg-pink-soft" />}
+                {hol.length > 0 && <Icon name="star" size={8} className="text-pink-soft" />}
               </div>
             </div>
           );
@@ -696,21 +743,24 @@ function Agenda({ from, days, events, deadlines, rituals, partners, onOpen, onNe
 }) {
   const list = Array.from({ length: days }, (_, i) => addDays(from, i));
   return (
-    <Card>
+    <Card className="lg:h-full [&>.core]:min-h-0 [&>.core]:overflow-y-auto">
       {list.map((d) => {
         const key = ymd(d);
         const evs = events.filter((m) => ymd(new Date(m.starts_at)) === key || (m.all_day && ymd(new Date(m.starts_at)) <= key && ymd(new Date(endOf(m))) >= key));
         const due = deadlines.filter((t) => t.due_on === key);
         const rit = rituals.filter((r) => r.on === key);
-        const empty = !evs.length && !due.length && !rit.length;
+        const hol = holidaysOn(key);
+        const empty = !evs.length && !due.length && !rit.length && !hol.length;
         return (
           <section key={key} className="row-line py-4">
             <div className="mb-2 flex items-center justify-between gap-3">
-              <h3 className={`text-[16px] font-semibold ${key === ymd(new Date()) ? "text-pink" : ""}`}>{d.toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" })}</h3>
+              <h3 className={`text-[16px] font-semibold ${key === ymd(new Date()) ? "text-pink" : ""}`}>{d.toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" })}
+                <span className="ms-2 text-[13px] font-normal text-mute">{hebDayMonth(d)}</span></h3>
               <IconButton icon="plus" label="אירוע ביום הזה" onClick={() => onNew(d)} />
             </div>
             {empty && <p className="text-[14px] text-mute">{d.getDay() === 6 ? "שבת שלום" : "יום פתוח. מקום טוב לבלוק עבודה."}</p>}
             <div className="space-y-1.5">
+              {hol.map((h) => <div key={h.name} className="px-2"><HolidayLine h={h} size={14} /></div>)}
               {evs.map((m) => (
                 <button key={m.id} onClick={() => onOpen(m)} className="press flex w-full items-center gap-3 rounded-[10px] px-2 py-2 text-start hover:bg-[var(--hover-veil)]">
                   <span className={`grid size-8 shrink-0 place-items-center rounded-[8px] ${KIND[m.kind].cls}`}><Icon name={KIND[m.kind].icon} size={16} /></span>

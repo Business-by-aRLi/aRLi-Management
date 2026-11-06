@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
@@ -16,7 +16,8 @@ import Clients from "./pages/Clients";
 import ClientPage from "./pages/ClientPage";
 import TimePage from "./pages/Time";
 import Tasks from "./pages/Tasks";
-import CalendarPage from "./pages/Calendar";
+// The calendar carries the Hebrew-date and holiday tables, so it loads only when opened.
+const CalendarPage = lazy(() => import("./pages/Calendar"));
 import Rhythm from "./pages/Rhythm";
 
 // Order follows daily use: plan first (home, tasks, calendar), then the books.
@@ -139,7 +140,7 @@ function Shell({ email }: { email: string }) {
           <Route path="/clients/:id" element={<ClientPage />} />
           <Route path="/time" element={<TimePage />} />
           <Route path="/tasks" element={<Tasks />} />
-          <Route path="/calendar" element={<CalendarPage />} />
+          <Route path="/calendar" element={<Suspense fallback={<Loading />}><CalendarPage /></Suspense>} />
           <Route path="/rhythm" element={<Rhythm />} />
         </Routes>
       </main>

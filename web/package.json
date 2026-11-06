@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@hebcal/core": "^5.10.1",
     "@supabase/supabase-js": "^2.119.0",
     "@tanstack/react-query": "^5.106.1",
     "react": "^19.2.0",
