@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0C0B10" />
+    <script>
+      // Apply the saved theme before the first paint (see src/lib/theme.ts).
+      try {
+        var p = localStorage.getItem("arli-theme");
+        var t = p === "light" || (p === "system" && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
+        document.documentElement.dataset.theme = t;
+        document.querySelector('meta[name="color-scheme"]').content = t;
+        document.querySelector('meta[name="theme-color"]').content = t === "light" ? "#F7F4EF" : "#0C0B10";
+      } catch (e) {}
+    </script>
     <title>aRLi · ניהול</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400&family=IBM+Plex+Sans+Hebrew:wght@300;400;500;600;700&display=swap" rel="stylesheet" />

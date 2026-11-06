@@ -3,7 +3,8 @@ import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
 import { usePartners } from "./lib/data";
-import { Button, IconButton, Loading, Modal } from "./components/ui";
+import { Button, IconButton, Loading, Modal, Segmented } from "./components/ui";
+import { useTheme, type ThemePref } from "./lib/theme";
 import { Icon, type IconName } from "./components/icons";
 import { QuickAdd } from "./components/QuickAdd";
 import Login, { SET_PASSWORD_FLAG, SetPassword } from "./pages/Login";
@@ -54,6 +55,7 @@ function Shell({ email }: { email: string }) {
   const [askLogout, setAskLogout] = useState(false);
   const [adding, setAdding] = useState(false);
   const [more, setMore] = useState(false);
+  const theme = useTheme();
   const { pathname } = useLocation();
   useEffect(() => { window.scrollTo(0, 0); }, [pathname]);
   const moreActive = PHONE_MORE.some(([to]) => pathname.startsWith(to));
@@ -82,6 +84,7 @@ function Shell({ email }: { email: string }) {
           </NavLink>
         ))}
         <Button className="!py-1.5 !px-4 ms-1 text-[15px]" onClick={() => setAdding(true)}><Icon name="plus" size={17} />חדש</Button>
+        <IconButton icon={theme.resolved === "light" ? "moon" : "sun"} label={theme.resolved === "light" ? "מעבר למצב כהה" : "מעבר למצב בהיר"} onClick={theme.toggle} aria-pressed={theme.resolved === "light"} />
         <IconButton icon="logout" label="יציאה" onClick={() => setAskLogout(true)} />
       </nav>
 
@@ -89,7 +92,7 @@ function Shell({ email }: { email: string }) {
       <nav aria-label="ניווט ראשי" className="tabbar glass-nav fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 items-end rounded-t-[24px] px-2 pt-2 lg:hidden">
         <Tab {...tabProps(PHONE_TABS[0])} />
         <Tab {...tabProps(PHONE_TABS[1])} />
-        <button onClick={() => setAdding(true)} aria-label="הוספה" className="press mx-auto mb-1 grid size-14 -translate-y-3 place-items-center rounded-full bg-pink text-ink">
+        <button onClick={() => setAdding(true)} aria-label="הוספה" className="press mx-auto mb-1 grid size-14 -translate-y-3 place-items-center rounded-full bg-pink text-on-pink">
           <Icon name="plus" size={26} strokeWidth={2.2} />
         </button>
         <Tab {...tabProps(PHONE_TABS[2])} />
@@ -106,6 +109,10 @@ function Shell({ email }: { email: string }) {
               <Icon name={icon} size={22} />{label}
             </NavLink>
           ))}
+          <div className="row-line mt-2 flex flex-wrap items-center justify-between gap-3 py-4">
+            <span className="flex items-center gap-3 text-[18px] font-medium"><Icon name={theme.resolved === "light" ? "sun" : "moon"} size={22} />מראה</span>
+            <Segmented<ThemePref> label="מראה" value={theme.pref} onChange={theme.setPref} options={[["dark", "כהה"], ["light", "בהיר"], ["system", "לפי המכשיר"]]} />
+          </div>
           <button onClick={() => { setMore(false); setAskLogout(true); }} className="row-btn flex items-center gap-3 py-3.5 text-start text-[18px] font-medium text-mute">
             <Icon name="logout" size={22} />יציאה
           </button>

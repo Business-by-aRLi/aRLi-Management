@@ -10,7 +10,7 @@ export function Button({ variant = "primary", arrow, className = "", children, .
   // Every button answers the pointer: a colour step on hover and a small press on click.
   const base = "press inline-flex items-center justify-center gap-3 rounded-full font-semibold transition-[background-color,color,box-shadow,transform] duration-300 disabled:opacity-50 disabled:pointer-events-none cursor-pointer";
   const styles = {
-    primary: `bg-pink text-ink hover:bg-pink-hover ${arrow ? "ps-6 pe-1.5 py-1.5" : "px-6 py-2.5"} text-[16px]`,
+    primary: `bg-pink text-on-pink hover:bg-pink-hover ${arrow ? "ps-6 pe-1.5 py-1.5" : "px-6 py-2.5"} text-[16px]`,
     ghost: "text-bone px-6 py-2.5 shadow-[inset_0_0_0_1px_var(--line-2)] hover:bg-[var(--hover-veil)] text-[16px]",
     quiet: "text-mute hover:text-bone px-3 py-1.5 text-[15px] font-medium",
   }[variant];
@@ -30,7 +30,7 @@ export function IconButton({ icon, label, tone = "mute", size = 36, className = 
   const tones = {
     mute: "text-mute hover:text-bone hover:bg-[var(--hover-veil)]",
     ghost: "text-bone shadow-[inset_0_0_0_1px_var(--line-2)] hover:bg-[var(--hover-veil)]",
-    pink: "bg-pink text-ink hover:bg-pink-hover",
+    pink: "bg-pink text-on-pink hover:bg-pink-hover",
   }[tone];
   return (
     <button type="button" aria-label={label} title={label} style={{ width: size, height: size }}
@@ -101,7 +101,7 @@ export function Segmented<T extends string>({ value, onChange, options, label }:
     <div role="tablist" aria-label={label} className="inline-flex max-w-full gap-1 overflow-x-auto rounded-full p-1 shadow-[inset_0_0_0_1px_var(--line)] no-scrollbar">
       {options.map(([k, l]) => (
         <button key={k} type="button" role="tab" aria-selected={value === k} onClick={() => onChange(k)}
-          className={`press whitespace-nowrap rounded-full px-4 py-1.5 text-[15px] font-medium transition-colors duration-300 ${value === k ? "bg-[var(--ink-3)] text-bone shadow-[inset_0_0_0_1px_var(--line-2)]" : "text-mute hover:text-bone"}`}>{l}</button>
+          className={`press whitespace-nowrap rounded-full px-3 py-1.5 text-[15px] font-medium transition-colors sm:px-4 duration-300 ${value === k ? "bg-[var(--ink-3)] text-bone shadow-[inset_0_0_0_1px_var(--line-2)]" : "text-mute hover:text-bone"}`}>{l}</button>
       ))}
     </div>
   );
@@ -130,7 +130,7 @@ export function Modal({ open, onClose, title, children }: { open: boolean; onClo
   }, [open, onClose]);
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center sm:p-4 animate-fade" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-[var(--scrim)] sm:items-center sm:p-4 animate-fade" onClick={onClose}>
       <div ref={box} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title}
         className="sheet w-full outline-none sm:max-w-lg" onClick={(e) => e.stopPropagation()}>
         <div className="bezel">

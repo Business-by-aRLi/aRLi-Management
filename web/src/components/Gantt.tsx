@@ -105,7 +105,7 @@ export default function Gantt({ tasks, projects, month, onMonth }: {
               return (
                 <div key={i} ref={todayCol === i + 1 ? todayCell : undefined} className={`pb-2 ${weekend(i + 1) ? "opacity-45" : ""}`}>
                   <div className="text-[10px]">{"אבגדהוש"[d.getDay()]}</div>
-                  <div className={`mx-auto grid size-6 place-items-center rounded-full ${todayCol === i + 1 ? "bg-pink font-semibold text-ink" : ""}`}><Num>{i + 1}</Num></div>
+                  <div className={`mx-auto grid size-6 place-items-center rounded-full ${todayCol === i + 1 ? "bg-pink font-semibold text-on-pink" : ""}`}><Num>{i + 1}</Num></div>
                 </div>
               );
             })}
@@ -130,7 +130,7 @@ export default function Gantt({ tasks, projects, month, onMonth }: {
                   <button key={t.id} onClick={open} title={tip} aria-label={tip}
                     className={`relative z-10 mx-0.5 flex h-[26px] items-center gap-1 overflow-hidden rounded-full px-2.5 text-start text-[13px] font-medium transition-transform duration-300 hover:-translate-y-px
                       ${t.status === "done" ? "bg-pink-soft/25 text-bone/70"
-                        : t.status === "in_progress" ? "bg-pink text-ink"
+                        : t.status === "in_progress" ? "bg-pink text-on-pink"
                         : "bg-[var(--ink-3)] text-bone shadow-[inset_0_0_0_1.5px_var(--pink)]"}
                       ${t.late ? "ring-2 ring-pink-soft ring-offset-2 ring-offset-[var(--ink-2)]" : ""}`}
                     style={{ gridColumn: `${t.from + 1} / ${t.to + 2}`, gridRow: t.lane + 1 }}>
