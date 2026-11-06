@@ -3,8 +3,8 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
-import { uploadReceipt, useExpenses, usePartners, useProjects, useSave, type Expense, type Income, type Task, type Meeting } from "../lib/data";
-import { Button, Field, Input, Select, Textarea } from "./ui";
+import { uploadReceipt, useExpenses, usePartners, useProjects, useSave, type Expense, type Income, type Task, type Meeting, type MeetingKind } from "../lib/data";
+import { Button, Field, Input, Segmented, Select, Textarea } from "./ui";
 import { currentQuarter, PlanPicker, ProjectPicker } from "./Pickers";
 
 // The partner who is signed in, used as the default payer/receiver/assignee.
@@ -223,37 +223,121 @@ export function TaskForm({ row, projectId, startOn, workPlanId, title, onDone, o
 // datetime-local works in the browser's own time zone, which for both partners is Israel.
 const toLocalInput = (iso?: string | null) => (iso ? new Date(new Date(iso).getTime() - new Date(iso).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "");
 
-// `startsAt` (datetime-local text) and `projectId` prefill a new meeting: the day picked in the calendar, the project page.
-export function MeetingForm({ row, onDone, startsAt, projectId, context }: {
-  row?: Meeting & { project_id?: string | null; notes?: string | null }; onDone: () => void; startsAt?: string; projectId?: string; context?: Context;
+const KIND_OPTIONS: [MeetingKind, string][] = [["meeting", "פגישה"], ["focus", "בלוק עבודה"], ["away", "לא זמינה"]];
+const addHour = (local: string) => (local ? toLocalInput(new Date(new Date(local).getTime() + 3600e3).toISOString()) : "");
+
+// What overlaps a time for the people taking part: events in the shared calendar and busy times from Google.
+function useConflicts(startsLocal: string, endsLocal: string, partnerIds: string[], skipId?: string, allDay?: boolean) {
+  const start = startsLocal && !allDay ? new Date(startsLocal).toISOString() : "";
+  const end = start ? new Date(endsLocal || addHour(startsLocal)).toISOString() : "";
+  const partners = usePartners();
+  return useQuery({
+    queryKey: ["conflicts", start, end, partnerIds.join(","), skipId],
+    enabled: !!start && end > start,
+    queryFn: async () => {
+      const who = partnerIds.length ? partnerIds : (partners.data ?? []).map((p) => p.id);
+      const [ev, busy] = await Promise.all([
+        supabase.from("meetings").select("id,title,starts_at,ends_at,partner_ids,all_day").lt("starts_at", end)
+          .gte("starts_at", new Date(new Date(start).getTime() - 864e5).toISOString()),
+        supabase.from("partner_busy").select("partner_id,starts_at,ends_at").lt("starts_at", end).gt("ends_at", start),
+      ]);
+      const out: string[] = [];
+      for (const m of (ev.data ?? []) as Meeting[]) {
+        const mEnd = m.ends_at ?? new Date(new Date(m.starts_at).getTime() + 3600e3).toISOString();
+        if (m.id === skipId || m.all_day || mEnd <= start) continue;
+        if (m.partner_ids?.length && !m.partner_ids.some((x) => who.includes(x))) continue;
+        out.push(`${m.title} (${new Date(m.starts_at).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })})`);
+      }
+      for (const b of busy.data ?? []) {
+        if (who.includes(b.partner_id)) out.push(`${partners.data?.find((p) => p.id === b.partner_id)?.name ?? ""} תפוסה ביומן האישי`);
+      }
+      return [...new Set(out)];
+    },
+  });
+}
+
+// One form for every calendar event. `startsAt`/`endsAt` (datetime-local text), `projectId`, `kind`, `taskId` and `title`
+// prefill a new event: the slot picked in the calendar, the project page, a task being blocked into time.
+export function MeetingForm({ row, onDone, startsAt, endsAt, projectId, context, kind, taskId, title, partnerIds }: {
+  row?: Meeting; onDone: () => void; startsAt?: string; endsAt?: string; projectId?: string; context?: Context;
+  kind?: MeetingKind; taskId?: string; title?: string; partnerIds?: string[];
 }) {
   const me = useMe();
+  const partners = usePartners();
   const save = useSave("meetings");
   const [f, setF] = useState({
-    title: row?.title ?? "", starts_at: row ? toLocalInput(row.starts_at) : startsAt ?? "", ends_at: toLocalInput(row?.ends_at),
+    title: row?.title ?? title ?? "", starts_at: row ? toLocalInput(row.starts_at) : startsAt ?? "",
+    ends_at: row ? toLocalInput(row.ends_at) : endsAt ?? (startsAt ? addHour(startsAt) : ""),
     location: row?.location ?? "", project_id: row?.project_id ?? projectId ?? "", notes: row?.notes ?? "",
+    kind: (row?.kind ?? kind ?? "meeting") as MeetingKind,
   });
-  const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
+  // "" = both of us; otherwise one partner's id.
+  const [who, setWho] = useState<string>(row ? (row.partner_ids?.length === 1 ? row.partner_ids[0] : "") : partnerIds?.length === 1 ? partnerIds[0] : "");
+  useEffect(() => { if (!row && !partnerIds && f.kind !== "meeting" && !who && me) setWho(me.id); }, [f.kind, me]);
+  const [allDay, setAllDay] = useState(row?.all_day ?? false);
+  const [meet, setMeet] = useState(!!row?.meet_link || (!row && f.kind === "meeting"));
+  const set = (k: keyof typeof f) => (v: string) => setF((s) => {
+    const next = { ...s, [k]: v };
+    // Moving the start keeps the length.
+    if (k === "starts_at" && s.starts_at && s.ends_at && v) {
+      next.ends_at = toLocalInput(new Date(new Date(v).getTime() + (new Date(s.ends_at).getTime() - new Date(s.starts_at).getTime())).toISOString());
+    } else if (k === "starts_at" && !s.ends_at) next.ends_at = addHour(v);
+    return next;
+  });
+  const partnerList = who ? [who] : [];
+  const conflicts = useConflicts(f.starts_at, f.ends_at, partnerList, row?.id, allDay);
   async function submit(e: FormEvent) {
     e.preventDefault();
+    const start = allDay ? new Date(`${f.starts_at.slice(0, 10)}T12:00`) : new Date(f.starts_at);
+    const end = allDay ? new Date(`${(f.ends_at || f.starts_at).slice(0, 10)}T12:00`) : f.ends_at ? new Date(f.ends_at) : null;
     await save.mutateAsync({
       id: row?.id,
       values: {
-        title: f.title, starts_at: new Date(f.starts_at).toISOString(), ends_at: f.ends_at ? new Date(f.ends_at).toISOString() : null,
+        title: f.title, starts_at: start.toISOString(), ends_at: end ? end.toISOString() : null,
         location: nullIfEmpty(f.location), project_id: nullIfEmpty(f.project_id), notes: nullIfEmpty(f.notes),
-        ...(row ? { reminded_at: null } : { created_by_partner_id: me?.id ?? null }),
+        kind: f.kind, partner_ids: partnerList, all_day: allDay,
+        want_meet: f.kind === "meeting" && meet && !row?.meet_link,
+        ...(row ? { reminded_at: null, followed_up_at: null } : { created_by_partner_id: me?.id ?? null, task_id: taskId ?? null }),
       },
     });
     onDone();
   }
   return (
     <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
-      <div className="sm:col-span-2"><Field label="כותרת"><Input required value={f.title} onChange={(e) => set("title")(e.target.value)} /></Field></div>
-      <Field label="מתחילה"><Input required type="datetime-local" value={f.starts_at} onChange={(e) => set("starts_at")(e.target.value)} /></Field>
-      <Field label="נגמרת"><Input type="datetime-local" value={f.ends_at} onChange={(e) => set("ends_at")(e.target.value)} /></Field>
-      <Field label="מקום / קישור"><Input value={f.location} onChange={(e) => set("location")(e.target.value)} /></Field>
-      <Field label="פרויקט"><ProjectPicker value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" {...context} /></Field>
-      <div className="sm:col-span-2"><Field label="הערות"><Textarea value={f.notes} onChange={(e) => set("notes")(e.target.value)} /></Field></div>
+      <div className="sm:col-span-2">
+        <Segmented label="סוג האירוע" value={f.kind} onChange={(v) => setF({ ...f, kind: v })} options={KIND_OPTIONS} />
+      </div>
+      <div className="sm:col-span-2"><Field label={f.kind === "focus" ? "על מה עובדים" : f.kind === "away" ? "למה (רק אתן רואות)" : "כותרת"}>
+        <Input required value={f.title} placeholder={f.kind === "away" ? "חופש, רופא, אישי" : ""} onChange={(e) => set("title")(e.target.value)} />
+      </Field></div>
+      <Field label="מתחילה"><Input required type={allDay ? "date" : "datetime-local"} value={allDay ? f.starts_at.slice(0, 10) : f.starts_at}
+        onChange={(e) => set("starts_at")(allDay ? `${e.target.value}T09:00` : e.target.value)} /></Field>
+      <Field label="נגמרת"><Input type={allDay ? "date" : "datetime-local"} value={allDay ? f.ends_at.slice(0, 10) : f.ends_at}
+        onChange={(e) => setF({ ...f, ends_at: allDay ? `${e.target.value}T10:00` : e.target.value })} /></Field>
+      <label className="flex items-center gap-2 text-[15px] sm:col-span-2">
+        <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} className="size-4 accent-[var(--pink)]" />
+        כל היום
+      </label>
+      <Field label="מי">
+        <Select value={who} onChange={(e) => setWho(e.target.value)}>
+          <option value="">שתינו</option>
+          {partners.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </Select>
+      </Field>
+      {f.kind !== "away" && <Field label="פרויקט"><ProjectPicker value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" {...context} /></Field>}
+      {f.kind === "meeting" && <>
+        <Field label="מקום / קישור"><Input value={f.location} onChange={(e) => set("location")(e.target.value)} /></Field>
+        <label className="flex items-center gap-2 self-end pb-3 text-[15px]">
+          <input type="checkbox" checked={meet} disabled={!!row?.meet_link} onChange={(e) => setMeet(e.target.checked)} className="size-4 accent-[var(--pink)]" />
+          {row?.meet_link ? "יש קישור Google Meet" : "ליצור קישור Google Meet"}
+        </label>
+      </>}
+      <div className="sm:col-span-2"><Field label={f.kind === "meeting" ? "אג'נדה והערות" : "הערות"}><Textarea value={f.notes} onChange={(e) => set("notes")(e.target.value)} /></Field></div>
+      {!!conflicts.data?.length && (
+        <div className="rounded-[12px] bg-pink/10 px-4 py-3 text-[14px] text-pink-soft sm:col-span-2" role="status">
+          חופף ל: {conflicts.data.join(" · ")}. אפשר לשמור בכל זאת.
+        </div>
+      )}
       <div className="sm:col-span-2"><Actions pending={save.isPending} error={save.error} onCancel={onDone} /></div>
     </form>
   );

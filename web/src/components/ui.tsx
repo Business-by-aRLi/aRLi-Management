@@ -100,7 +100,7 @@ export function Segmented<T extends string>({ value, onChange, options, label }:
   return (
     <div role="tablist" aria-label={label} className="inline-flex max-w-full gap-1 overflow-x-auto rounded-full p-1 shadow-[inset_0_0_0_1px_var(--line)] no-scrollbar">
       {options.map(([k, l]) => (
-        <button key={k} role="tab" aria-selected={value === k} onClick={() => onChange(k)}
+        <button key={k} type="button" role="tab" aria-selected={value === k} onClick={() => onChange(k)}
           className={`press whitespace-nowrap rounded-full px-4 py-1.5 text-[15px] font-medium transition-colors duration-300 ${value === k ? "bg-[var(--ink-3)] text-bone shadow-[inset_0_0_0_1px_var(--line-2)]" : "text-mute hover:text-bone"}`}>{l}</button>
       ))}
     </div>

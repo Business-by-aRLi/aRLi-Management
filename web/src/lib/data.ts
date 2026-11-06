@@ -27,7 +27,16 @@ export type Task = {
   id: string; title: string; description: string | null; status: string; due_on: string | null; start_on: string | null; priority: number;
   created_at: string; completed_at: string | null; work_plan_id: string | null; project_id: string | null; assignee_partner_id: string | null; is_private: boolean; projects?: { name: string } | null; partners?: { name: string } | null;
 };
-export type Meeting = { id: string; title: string; starts_at: string; ends_at: string | null; location: string | null; projects?: { name: string } | null };
+export type MeetingKind = "meeting" | "focus" | "away";
+export type Meeting = {
+  id: string; title: string; starts_at: string; ends_at: string | null; location: string | null; projects?: { name: string } | null;
+  project_id?: string | null; notes?: string | null; kind: MeetingKind; partner_ids: string[]; all_day: boolean;
+  meet_link: string | null; want_meet?: boolean; task_id: string | null; google_event_id: string | null; needs_push?: boolean;
+};
+export type Busy = { partner_id: string; starts_at: string; ends_at: string };
+export type GoogleConnection = { partner_id: string; email: string; connected_at: string; calendar: boolean };
+export type SyncStatus = { calendar_id: string | null; last_pull: string | null; last_error: string | null; pending: number };
+export type Slot = { starts_at: string; ends_at: string };
 export type TimeEntry = { id: string; project_id: string | null; work_date: string; minutes: number; kind: string; description: string | null; projects?: { name: string } | null; partners?: { name: string } | null };
 export type Share = { project_id: string; partner_id: string; percent: number };
 export type RecurringCost = { id: string; name: string; amount: number; frequency: string; active: boolean; paid_by_partner_id: string | null; project_id: string | null };
@@ -56,6 +65,19 @@ export const useTasks = () => q<Task[]>(["tasks"], () =>
   supabase.from("tasks").select("*,projects(name),partners(name)").order("due_on", { ascending: true, nullsFirst: false }));
 export const useMeetings = (fromIso: string, toIso: string) => q<Meeting[]>(["meetings", fromIso, toIso], () =>
   supabase.from("meetings").select("*,projects(name)").gte("starts_at", fromIso).lte("starts_at", toIso).order("starts_at"));
+export const useBusy = (fromIso: string, toIso: string) => q<Busy[]>(["busy", fromIso, toIso], () =>
+  supabase.from("partner_busy").select("*").lt("starts_at", toIso).gt("ends_at", fromIso).order("starts_at"));
+export const useGoogleConnections = () => q<GoogleConnection[]>(["google"], () => supabase.from("google_connections").select("*"));
+export const useSyncStatus = () => useQuery<SyncStatus | null>({
+  queryKey: ["sync-status"], refetchInterval: 60_000,
+  queryFn: async () => { const { data } = await supabase.from("calendar_sync_status").select("*").maybeSingle(); return (data as SyncStatus) ?? null; },
+});
+export async function findFreeSlots(opts: { from?: string; days?: number; minutes?: number; partners?: string[] }): Promise<Slot[]> {
+  return must(await supabase.rpc("find_free_slots", {
+    p_from: opts.from ?? null, p_days: opts.days ?? 7, p_minutes: opts.minutes ?? 60, p_partners: opts.partners ?? [],
+  })) as Slot[];
+}
+
 export const useIdeas = () => q<Idea[]>(["ideas"], () => supabase.from("ideas").select("*,partners(name)").order("created_at", { ascending: false }));
 export const useWorkPlans = () => q<WorkPlan[]>(["work_plans"], () => supabase.from("work_plans").select("*").order("period_start", { ascending: false, nullsFirst: false }));
 export type Ritual = {
