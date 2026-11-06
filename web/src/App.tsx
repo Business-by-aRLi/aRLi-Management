@@ -16,6 +16,7 @@ import ClientPage from "./pages/ClientPage";
 import TimePage from "./pages/Time";
 import Tasks from "./pages/Tasks";
 import CalendarPage from "./pages/Calendar";
+import Rhythm from "./pages/Rhythm";
 
 // Order follows daily use: plan first (home, tasks, calendar), then the books.
 const LINKS: [string, string, IconName][] = [
@@ -132,6 +133,7 @@ function Shell({ email }: { email: string }) {
           <Route path="/time" element={<TimePage />} />
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/calendar" element={<CalendarPage />} />
+          <Route path="/rhythm" element={<Rhythm />} />
         </Routes>
       </main>
     </div>

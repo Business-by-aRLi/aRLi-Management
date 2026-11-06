@@ -11,13 +11,7 @@ import { Button, Card, Eyebrow, IconButton, Input, Modal, Num, Pill, useConfirm 
 import { Icon } from "../components/icons";
 import { PlanForm, SettlementForm, useMe } from "../components/forms";
 import Gantt from "../components/Gantt";
-
-const LINES = [
-  "כל משימה שנסגרת היום היא לקוח מרוצה מחר.",
-  "רעיון אחד טוב בשבוע מספיק כדי לשנות רבעון.",
-  "בונים את aRLi צעד אחרי צעד, ביחד.",
-  "מה הדבר האחד שיקדם אותנו הכי הרבה השבוע?",
-];
+import { NextRitual, PrincipleLine } from "../components/Coaching";
 
 export default function Dashboard() {
   const me = useMe();
@@ -36,7 +30,6 @@ export default function Dashboard() {
   const createMinutes = (time.data ?? []).filter((t) => t.work_date.startsWith(m)).reduce((s, t) => s + t.minutes, 0);
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "בוקר טוב" : hour < 17 ? "צהריים טובים" : hour < 21 ? "ערב טוב" : "לילה טוב";
-  const line = LINES[new Date().getDate() % LINES.length];
 
   return (
     <div className="space-y-12">
@@ -45,7 +38,7 @@ export default function Dashboard() {
         <h1 className="mt-2 text-[clamp(38px,5.6vw,92px)] font-semibold leading-[1.04] tracking-[-0.025em]">
           {greeting}{me ? `, ${me.name}` : ""}. <span className="text-pink">בונים הלאה.</span>
         </h1>
-        <p className="mt-4 max-w-[46ch] text-[clamp(18px,1.5vw,22px)] font-light text-mute">{line}</p>
+        <PrincipleLine />
       </section>
 
       {/* Momentum */}
@@ -55,6 +48,9 @@ export default function Dashboard() {
         <Momentum value={money(monthIncome)} label="נכנס החודש" />
         <Momentum value={`${Math.round(createMinutes / 60)}`} suffix="ש׳" label="שעות יצירה החודש" />
       </section>
+
+      {/* The business rhythm: the next ritual */}
+      <NextRitual />
 
       {/* The month's plan */}
       <Card>

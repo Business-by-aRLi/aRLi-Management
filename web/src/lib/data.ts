@@ -58,6 +58,14 @@ export const useMeetings = (fromIso: string, toIso: string) => q<Meeting[]>(["me
   supabase.from("meetings").select("*,projects(name)").gte("starts_at", fromIso).lte("starts_at", toIso).order("starts_at"));
 export const useIdeas = () => q<Idea[]>(["ideas"], () => supabase.from("ideas").select("*,partners(name)").order("created_at", { ascending: false }));
 export const useWorkPlans = () => q<WorkPlan[]>(["work_plans"], () => supabase.from("work_plans").select("*").order("period_start", { ascending: false, nullsFirst: false }));
+export type Ritual = {
+  id: string; key: string; title: string; description: string | null; cadence: "daily" | "weekly" | "monthly" | "quarterly" | "yearly";
+  weekday: number | null; month: number | null; at_time: string; lead_days: number; duration: string | null; source: string | null;
+  active: boolean; sort: number; last_done_on: string | null; next_on: string | null;
+};
+export type Principle = { id: string; text: string; theme: string; why: string | null; ritual_key: string | null; favorite: boolean; active: boolean };
+export const useRituals = () => q<Ritual[]>(["rituals"], () => supabase.from("ritual_schedule").select("*").order("sort"));
+export const usePrinciples = () => q<Principle[]>(["principles"], () => supabase.from("principles").select("*").order("created_at"));
 export const useTime = () => q<TimeEntry[]>(["time"], () =>
   supabase.from("time_entries").select("*,projects(name),partners(name)").order("work_date", { ascending: false }).limit(500));
 
