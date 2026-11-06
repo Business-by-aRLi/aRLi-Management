@@ -66,7 +66,7 @@ export default function ProjectPage() {
           {!exp.length && <p className="text-mute">אין הוצאות בפרויקט.</p>}
           {exp.map((e) => (
             <div key={e.id} className="row-line flex justify-between gap-3 py-2.5">
-              <span>{e.description} <span className="text-mute">· {e.partners?.name} · <Num>{date(e.spent_on)}</Num></span></span>
+              <span>{e.description} <span className="text-mute">{e.vendor && <>· {e.vendor} </>}· {e.partners?.name} · <Num>{date(e.spent_on)}</Num></span></span>
               <Num>{money(e.amount)}</Num>
             </div>
           ))}

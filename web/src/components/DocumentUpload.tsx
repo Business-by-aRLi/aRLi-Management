@@ -89,7 +89,7 @@ export function DocumentUpload({ onDone, projectId, context }: { onDone: () => v
   const foreign = p && p.currency !== "ILS" && p.amount ? `${p.amount} ${p.currency}` : "";
   const amount = p?.amount && !foreign ? String(p.amount) : "";
   const notes = [foreign && `סכום מקורי: ${foreign}`].filter(Boolean).join(" · ");
-  const desc = [p?.counterparty, p?.description].filter(Boolean).join(": ");
+  const desc = p?.description || p?.counterparty || "";
 
   return (
     <div className="grid gap-4">
@@ -98,7 +98,7 @@ export function DocumentUpload({ onDone, projectId, context }: { onDone: () => v
       <Segmented label="סוג תנועה" value={kind} onChange={setKind} options={[["expense", "הוצאה"], ["income", "הכנסה"]]} />
       {kind === "expense" ? (
         <ExpenseForm key="expense" receiptPath={state.path} onDone={saved} onCancel={cancel} context={context} initial={{
-          amount, description: desc, ...(isDate(p?.date) ? { spent_on: p!.date } : {}), project_id: projectId ?? p?.project_id ?? "",
+          amount, description: desc, vendor: p?.counterparty ?? "", ...(isDate(p?.date) ? { spent_on: p!.date } : {}), project_id: projectId ?? p?.project_id ?? "",
           category: p?.category ?? "", reference: p?.invoice_number ?? "", notes,
         }} />
       ) : (
