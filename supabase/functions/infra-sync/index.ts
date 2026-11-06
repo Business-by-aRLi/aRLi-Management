@@ -103,6 +103,8 @@ async function vercel(from: Date, to: Date): Promise<Costs> {
     const qs = new URLSearchParams({ from: start.toISOString(), to: end.toISOString() });
     if (vercelTeam()) qs.set("teamId", vercelTeam());
     const r = await fetch(`https://api.vercel.com/v1/billing/charges?${qs}`, { headers: { Authorization: `Bearer ${keyOf("vercel")}` } });
+    // A month with no billing data (before the team was on a paid plan) answers 404 costs_not_found.
+    if (r.status === 404) { await r.body?.cancel(); start = next; continue; }
     if (!r.ok) throw new Error(`vercel ${r.status}: ${(await r.text()).slice(0, 200)}`);
     let buf = "";
     const take = (line: string) => {
