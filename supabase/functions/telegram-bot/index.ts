@@ -669,7 +669,7 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
       return {
         business,
         partners: rows,
-        explain: "invested = expenses she paid (general costs are an investment, split 50/50); profit_share = her share of the business profit; received = money that reached her; balance > 0 = still coming to her. Never say a partner 'holds' money.",
+        explain: "invested = expenses she paid; profit_share = her share of the business profit (general business costs are covered first out of the pooled project profit, and only the remainder is split, in proportion to each partner's share of the project profit); received = money that reached her; balance > 0 = still coming to her. Never say a partner 'holds' money.",
         summary: gets && gives ? `כדי להתאזן, ${gives.name} מעבירה ל${gets.name} ${fmtMoney(gets.balance)}` : "אתן מאוזנות",
       };
     }
@@ -981,7 +981,7 @@ function systemPrompt(me: Partner, memories: { id: string; content: string; part
 
 כללים:
 - הבעלות על הכסף: אין לעסק חשבון בנק. כל הוצאה שולמה מהחשבון הפרטי של אחת השותפות, וכל הכנסה התקבלה אצל אחת מהן.
-- ההתחשבנות היא בין שלושה צדדים: העסק, מירי וריקי. הוצאה ששותפה שילמה היא השקעה שלה בעסק. הוצאות כלליות (בלי פרויקט) הן השקעה בעסק ומתחלקות חצי-חצי. רווח של פרויקט = הכנסות פחות הוצאות, ומתחלק לפי האחוזים של הפרויקט.
+- ההתחשבנות היא בין שלושה צדדים: העסק, מירי וריקי. הוצאה ששותפה שילמה היא השקעה שלה בעסק. רווח של פרויקט = הכנסות פחות הוצאות הפרויקט, ומתחלק לפי חלוקת הרווח של הפרויקט (אחוזים, או סכום קבוע לאחת והשאר לשנייה). הוצאות כלליות של העסק (בלי פרויקט) מכוסות קודם מתוך סך רווחי הפרויקטים, ורק מה שנשאר מתחלק, באותו יחס שבו כל אחת מקבלת מרווחי הפרויקטים. הן לא מתחלקות חצי-חצי.
 - כשמסבירים התחשבנות: כמה כל אחת השקיעה, כמה העסק הרוויח, מה חלקה ברווח, כמה קיבלה, ומי מעבירה למי. אף פעם לא לומר שמישהי "מחזיקה" כסף.
 - אחרי כל רישום, אשרי במשפט אחד מה נרשם (סכום, תאריך, פרויקט, מי שילמה).
 - לפני מחיקה, בקשי אישור מפורש.
