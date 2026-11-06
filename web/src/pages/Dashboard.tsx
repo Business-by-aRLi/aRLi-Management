@@ -286,6 +286,7 @@ function ProfitSplit() {
                 <span className="text-mute">אמורה לקבל מהרווח</span><Num className="font-medium">{money(r.profit_share)}</Num>
               </div>
               {showExpected && <Line label="לפי הצפי" value={r.expected_profit_share} />}
+              <Line label="קיבלה עד עכשיו מכספי העסק" value={r.received} />
             </div>
           );
         })}
