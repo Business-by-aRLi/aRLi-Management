@@ -443,6 +443,7 @@ const PULLERS: Record<string, { run: (from: Date, to: Date) => Promise<Costs> }>
 let started = 0;
 Deno.serve(async (req) => {
   started = Date.now();
+  usage.clear(); // a warm worker serves several requests: start each with empty usage totals
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   if (!(await authorized(req))) return json({ error: "אין הרשאה" }, 403);
