@@ -25,7 +25,7 @@ export type Income = {
 export type Settlement = { id: string; settled_on: string; amount: number; from_partner_id: string; to_partner_id: string; notes: string | null };
 export type Task = {
   id: string; title: string; description: string | null; status: string; due_on: string | null; start_on: string | null; priority: number;
-  created_at: string; completed_at: string | null; work_plan_id: string | null; project_id: string | null; assignee_partner_id: string | null; projects?: { name: string } | null; partners?: { name: string } | null;
+  created_at: string; completed_at: string | null; work_plan_id: string | null; project_id: string | null; assignee_partner_id: string | null; is_private: boolean; projects?: { name: string } | null; partners?: { name: string } | null;
 };
 export type Meeting = { id: string; title: string; starts_at: string; ends_at: string | null; location: string | null; projects?: { name: string } | null };
 export type TimeEntry = { id: string; project_id: string | null; work_date: string; minutes: number; kind: string; description: string | null; projects?: { name: string } | null; partners?: { name: string } | null };

@@ -103,6 +103,19 @@ function check<T>(res: { data: T; error: { message: string } | null }): T {
   return res.data;
 }
 
+// Shared tasks plus this partner's own private ones. The other partner's private tasks never reach the bot.
+const visibleTasks = (me: Partner) => `is_private.eq.false,assignee_partner_id.eq.${me.id}`;
+
+// Passwords, API keys and card numbers never go into memory.
+const looksSecret = (t: string) =>
+  /(sk-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{30,}|ghp_[A-Za-z0-9]{30,}|\b\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{4}\b|סיסמ|password)/i.test(t);
+
+async function memoriesFor(me: Partner) {
+  return check(await db.from("bot_memories").select("id,content,kind,partner_id")
+    .or(`partner_id.is.null,partner_id.eq.${me.id}`).order("created_at", { ascending: false }).limit(80)) as
+    { id: string; content: string; kind: string; partner_id: string | null }[];
+}
+
 // ---------- tools the model can call ----------
 const S = (type: string, description?: string, extra: Record<string, unknown> = {}) => ({ type, description, ...extra });
 const PARTNER = S("string", "שם השותפה", { enum: ["מירי", "ריקי"] });
@@ -149,12 +162,13 @@ const toolDeclarations = [
   },
   {
     name: "add_task",
-    description: "יצירת משימה.",
+    description: "יצירת משימה. משימה אישית (בריאות, בית, משפחה, סידורים, כסף פרטי) היא פרטית: רק מי שכתבה אותה רואה אותה.",
     parameters: S("object", undefined, {
       properties: {
         title: S("string"), description: S("string"), project_name: S("string"),
         assignee: PARTNER, due_on: S("string", "YYYY-MM-DD"),
         priority: S("integer", "1 גבוהה, 2 רגילה, 3 נמוכה"),
+        private: S("boolean", "true למשימה אישית שלא קשורה לעסק. היא תהיה של השותפה שכותבת, והשותפה השנייה לא תראה אותה."),
       },
       required: ["title"],
     }),
@@ -292,6 +306,36 @@ const toolDeclarations = [
     }),
   },
   {
+    name: "remember_fact",
+    description: "שמירת עובדה לטווח ארוך, כשהשותפה אומרת \"תזכרי ש...\" או מספרת משהו קבוע שיעזור בהמשך (העדפה, איש קשר, החלטה). לא לשמור סיסמאות, מפתחות או מספרי כרטיס.",
+    parameters: S("object", undefined, {
+      properties: {
+        content: S("string", "העובדה במשפט אחד ברור, בגוף שלישי"),
+        kind: S("string", undefined, { enum: ["fact", "preference", "person", "project", "decision"] }),
+        shared: S("boolean", "true כשזו עובדה על העסק ששתי השותפות צריכות. ברירת מחדל: אישית לשותפה שכותבת."),
+      },
+      required: ["content"],
+    }),
+  },
+  {
+    name: "forget_fact",
+    description: "מחיקת עובדה מהזיכרון, כשהשותפה מבקשת לשכוח משהו או מתקנת עובדה שגויה. id מתוך רשימת הזיכרון בהנחיות.",
+    parameters: S("object", undefined, { properties: { id: S("string") }, required: ["id"] }),
+  },
+  {
+    name: "add_project_note",
+    description: "הערה על פרויקט: החלטה, מה סוכם עם הלקוח, מה נבנה, מה הצעד הבא.",
+    parameters: S("object", undefined, {
+      properties: { project_name: S("string"), content: S("string") },
+      required: ["project_name", "content"],
+    }),
+  },
+  {
+    name: "get_project_notes",
+    description: "כל מה שידוע על פרויקט: פרטים, מצב כספי, משימות פתוחות והערות. להשתמש לפני הצעת מחיר, סיכום או תשובה על \"מה המצב ב...\".",
+    parameters: S("object", undefined, { properties: { project_name: S("string") }, required: ["project_name"] }),
+  },
+  {
     name: "delete_record",
     description: "מחיקת רשומה שנרשמה בטעות. רק אחרי שהשותפה אישרה במפורש.",
     parameters: S("object", undefined, {
@@ -313,6 +357,8 @@ const UNDOABLE: Record<string, { table: string; label: string }> = {
   add_income: { table: "income", label: "הכנסה" },
   add_settlement: { table: "settlements", label: "העברה" },
   add_task: { table: "tasks", label: "משימה" },
+  remember_fact: { table: "bot_memories", label: "זיכרון" },
+  add_project_note: { table: "project_notes", label: "הערה" },
   add_meeting: { table: "meetings", label: "פגישה" },
   add_reminder: { table: "reminders", label: "תזכורת" },
   log_time: { table: "time_entries", label: "דיווח שעות" },
@@ -406,22 +452,26 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
     }
     case "add_task": {
       const project = await projectByName(a.project_name);
-      const assignee = await partnerByName(a.assignee);
+      const isPrivate = a.private === true;
+      // A private task always belongs to the partner who wrote it.
+      const assignee = isPrivate ? me : await partnerByName(a.assignee);
       const row = check(await db.from("tasks").insert({
         title: a.title, description: a.description ?? null, project_id: project?.id ?? null,
         assignee_partner_id: assignee?.id ?? null, due_on: a.due_on ?? null, priority: a.priority ?? 2,
+        is_private: isPrivate,
       }).select("id").single());
       if (assignee && assignee.id !== me.id && assignee.telegram_chat_id) {
         await send(assignee.telegram_chat_id, `📝 ${me.name} הוסיפה לך משימה: ${a.title}${a.due_on ? ` (עד ${a.due_on})` : ""}`);
       }
-      return { ok: true, id: row.id };
+      return { ok: true, id: row.id, private: isPrivate };
     }
     case "update_task": {
       const patch: Record<string, unknown> = {};
       if (a.status) { patch.status = a.status; patch.completed_at = a.status === "done" ? new Date().toISOString() : null; }
       if (a.due_on) { patch.due_on = a.due_on; patch.reminded_on = null; }
       if (a.assignee) patch.assignee_partner_id = (await partnerByName(a.assignee))?.id ?? null;
-      check(await db.from("tasks").update(patch).eq("id", a.task_id));
+      const done = check(await db.from("tasks").update(patch).eq("id", a.task_id).or(visibleTasks(me)).select("id"));
+      if (!done?.length) throw new Error("המשימה לא נמצאה");
       return { ok: true };
     }
     case "add_meeting": {
@@ -511,7 +561,7 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
       return { rows, total: rows.reduce((s, r) => s + Number(r.amount), 0) };
     }
     case "list_tasks": {
-      let q = db.from("tasks").select("id,title,status,due_on,priority,projects(name),partners(name)");
+      let q = db.from("tasks").select("id,title,status,due_on,priority,is_private,snooze_count,projects(name),partners(name)").or(visibleTasks(me));
       q = a.status ? q.eq("status", a.status) : q.neq("status", "done");
       if (a.assignee) q = q.eq("assignee_partner_id", (await partnerByName(a.assignee))?.id);
       if (a.project_name) q = q.eq("project_id", (await projectByName(a.project_name))!.id);
@@ -542,6 +592,38 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
         byKey[k] = (byKey[k] ?? 0) + r.minutes;
       }
       return Object.entries(byKey).map(([k, m]) => ({ group: k, hours: Math.round((m / 60) * 10) / 10 }));
+    }
+    case "remember_fact": {
+      if (looksSecret(a.content)) throw new Error("זה נראה כמו סיסמה או מפתח. דברים כאלה אני לא שומרת.");
+      const row = check(await db.from("bot_memories").insert({
+        content: a.content, kind: a.kind ?? "fact", partner_id: a.shared ? null : me.id,
+      }).select("id").single());
+      return { ok: true, id: row.id, shared: !!a.shared };
+    }
+    case "forget_fact": {
+      const gone = check(await db.from("bot_memories").delete().eq("id", a.id)
+        .or(`partner_id.is.null,partner_id.eq.${me.id}`).select("content"));
+      if (!gone?.length) throw new Error("לא מצאתי את העובדה הזו בזיכרון");
+      return { ok: true, forgotten: gone[0].content };
+    }
+    case "add_project_note": {
+      const project = await projectByName(a.project_name);
+      if (!project) throw new Error("חסר שם פרויקט");
+      const row = check(await db.from("project_notes").insert({
+        project_id: project.id, partner_id: me.id, content: a.content,
+      }).select("id").single());
+      return { ok: true, id: row.id, project: project.name };
+    }
+    case "get_project_notes": {
+      const project = await projectByName(a.project_name);
+      if (!project) throw new Error("חסר שם פרויקט");
+      const [info, money, notes, tasks] = await Promise.all([
+        db.from("projects").select("name,type,status,agreed_price,notes,started_on,closed_on,clients(name)").eq("id", project.id).single(),
+        db.from("project_financials").select("income,expenses,profit,outstanding,expected_profit").eq("project_id", project.id).maybeSingle(),
+        db.from("project_notes").select("content,source,created_at,partners(name)").eq("project_id", project.id).order("created_at", { ascending: false }).limit(40),
+        db.from("tasks").select("title,status,due_on,partners(name)").eq("project_id", project.id).neq("status", "done").or(visibleTasks(me)),
+      ]);
+      return { project: check(info), money: check(money), open_tasks: check(tasks), notes: check(notes) };
     }
     case "delete_record": {
       check(await db.from(a.table).delete().eq("id", a.id));
@@ -760,8 +842,11 @@ async function readGmailInvoice(me: Partner, messageId: string, attachmentName?:
 }
 
 // ---------- Gemini ----------
-function systemPrompt(me: Partner) {
+function systemPrompt(me: Partner, memories: { id: string; content: string; partner_id: string | null }[] = []) {
   const now = israelNow();
+  const memo = memories.length
+    ? memories.map((m) => `- [${m.id}] ${m.partner_id ? "" : "(משותף) "}${m.content}`).join("\n")
+    : "(עוד אין)";
   return `את העוזרת החכמה של aRLi, העסק של השותפות מירי וריקי. את מדברת בעברית, בקצרה, בחום ובבהירות.
 את כותבת כרגע עם ${me.name}.
 עכשיו בישראל: ${now.weekday} ${now.date} ${now.time} (UTC${now.offset}). תאריכים יחסיים ("מחר", "ביום שלישי") מחשבים מכאן. זמנים שולחים לכלים בפורמט ISO עם ${now.offset}.
@@ -772,6 +857,9 @@ function systemPrompt(me: Partner) {
 - כשמגיע צילום של חשבונית או קבלה: קראי את הסכום, התאריך, שם הספק ומספר החשבונית, ורשמי אותה כהוצאה עם attach_receipt=true. אם לא ברור לאיזה פרויקט היא שייכת, שאלי. אם שום דבר לא ברור, שאלי לפני שאת רושמת.
 - כשמגיעה הודעה קולית: הביני מה נאמר ופעלי לפי זה, ובתשובה כתבי בקצרה מה הבנת.
 - חשבוניות מ-Gmail: כשמבקשים למצוא חשבוניות במייל, חפשי עם search_gmail_invoices (בנו שאילתת Gmail עם ספק, טווח תאריכים after:/before: בפורמט YYYY/MM/DD, ומילים כמו invoice, receipt, חשבונית, קבלה). קראי כל מייל רלוונטי שעוד לא נרשם עם read_gmail_invoice. אחר כך הציגי רשימה קצרה: ספק, תאריך, סכום ומטבע, ופרויקט משוער. רשמי עם add_expense רק אחרי שהשותפה אישרה, ותמיד העבירי gmail_message_id ו-receipt_path. אם הסכום לא בשקלים, שאלי מה הסכום בשקלים (למשל מהחיוב בכרטיס), ורשמי את הסכום המקורי ב-notes. אם הכלי אומר שה-Gmail לא מחובר, הפעילי connect_gmail.
+- משימות אישיות: כשמשימה לא קשורה לעסק (בריאות, בית, משפחה, סידורים, כסף פרטי), רשמי אותה עם private=true. רק ${me.name} תראה אותה. אם לא ברור אם זה אישי או עסקי, נחשי לפי ההקשר וכתבי בתשובה מה בחרת.
+- זיכרון: כשמספרים לך משהו קבוע ("תזכרי ש...", העדפה, איש קשר, החלטה), שמרי עם remember_fact. כשמבקשים לשכוח או מתקנים עובדה, מחקי עם forget_fact (ואם זה תיקון, שמרי את הגרסה הנכונה). אל תשמרי כל פרט מהשיחה, רק מה שיעזור גם בעוד חודש.
+- פרויקטים: החלטה או סיכום חשוב על פרויקט נשמרים עם add_project_note. לשאלה "מה המצב ב..." או לפני הצעת מחיר, קראי get_project_notes.
 - ההיסטוריה עשויה לכלול שורות "[מידע פנימי: ...]" עם תוצאות כלים מתורות קודמות. השתמשי בהן (למשל ב-message_id וב-receipt_path), אבל לעולם אל תכתבי אותן בתשובה.
 
 כללים:
@@ -781,7 +869,10 @@ function systemPrompt(me: Partner) {
 - אחרי כל רישום, אשרי במשפט אחד מה נרשם (סכום, תאריך, פרויקט, מי שילמה).
 - לפני מחיקה, בקשי אישור מפורש.
 - אל תמציאי נתונים. אם חסר משהו חיוני, כמו סכום, שאלי.
-- בלי Markdown: טקסט פשוט, אפשר אימוג'י במידה.`;
+- בלי Markdown: טקסט פשוט, אפשר אימוג'י במידה.
+
+מה את זוכרת (${me.name} ועובדות משותפות של העסק). השתמשי בזה בטבעיות, בלי לצטט מספרי id:
+${memo}`;
 }
 
 // deno-lint-ignore no-explicit-any
@@ -810,9 +901,10 @@ async function converse(me: Partner, chatId: number, userParts: any[], userText:
 
   let answer = "";
   const toolLog: string[] = [];
+  const memories = await memoriesFor(me).catch(() => []);
   for (let step = 0; step < 10; step++) {
     const res = await gemini({
-      systemInstruction: { parts: [{ text: systemPrompt(me) }] },
+      systemInstruction: { parts: [{ text: systemPrompt(me, memories) }] },
       contents,
       tools: [{ functionDeclarations: toolDeclarations }],
     });
@@ -867,6 +959,7 @@ const COMMANDS = [
   { command: "time", description: "דיווח שעות" },
   { command: "invoices", description: "חשבוניות מה-Gmail של החודש" },
   { command: "gmail", description: "חיבור Google (Gmail)" },
+  { command: "memory", description: "מה את זוכרת עליי" },
   { command: "help", description: "מה אפשר לעשות" },
 ];
 
@@ -889,6 +982,8 @@ const HELP_TEXT = `מה אפשר לעשות איתי:
 🗓 פגישה: "פגישה עם עקיבא מחר ב-10"
 ⏱ שעות: "עבדתי שעתיים על Kupat MB"
 ⏰ תזכורת: "תזכירי לי ביום ראשון ב-9 לשלם על השרת"
+🔒 משימה אישית: "להחזיר את הספרים לספרייה עד יום חמישי". משימות אישיות רק את רואה
+🧠 זיכרון: "תזכרי שעקיבא מעדיף וואטסאפ". /memory מראה מה אני זוכרת
 📧 חשבוניות: "תמצאי לי את החשבוניות מ-Vercel של החודש"
 🎙 אפשר גם הודעה קולית, אני אבין.
 
@@ -920,7 +1015,7 @@ async function remember(chatId: number, userText: string, botText: string) {
 // deno-lint-ignore no-explicit-any
 function taskLine(t: any, today: string) {
   const due = t.due_on ? (t.due_on < today ? ` (באיחור, ${t.due_on})` : t.due_on === today ? " (היום)" : ` (עד ${t.due_on})`) : "";
-  return `${t.priority === 1 ? "🔴" : "▫️"} ${t.title}${t.projects?.name ? ` · ${t.projects.name}` : ""}${due}`;
+  return `${t.priority === 1 ? "🔴" : "▫️"} ${t.is_private ? "🔒 " : ""}${t.title}${t.projects?.name ? ` · ${t.projects.name}` : ""}${due}`;
 }
 
 // deno-lint-ignore no-explicit-any
@@ -933,7 +1028,7 @@ function doneButtons(tasks: any[]) {
 }
 
 async function myOpenTasks(me: Partner) {
-  return check(await db.from("tasks").select("id,title,status,due_on,priority,projects(name)")
+  return check(await db.from("tasks").select("id,title,status,due_on,priority,is_private,projects(name)")
     .neq("status", "done").or(`assignee_partner_id.eq.${me.id},assignee_partner_id.is.null`)
     // deno-lint-ignore no-explicit-any
     .order("due_on", { ascending: true, nullsFirst: false }).order("priority").limit(30)) as any[];
@@ -1010,6 +1105,16 @@ async function handleCommand(me: Partner, chatId: number, text: string, ctx: Ctx
       }
       return true;
     }
+    case "memory": {
+      const mems = await memoriesFor(me);
+      const mine = mems.filter((m) => m.partner_id), shared = mems.filter((m) => !m.partner_id);
+      const lines = ["🧠 מה אני זוכרת", ""];
+      lines.push("עלייך:", ...(mine.length ? mine.map((m) => `• ${m.content}`) : ["עוד כלום"]));
+      if (shared.length) lines.push("", "על העסק (משותף):", ...shared.map((m) => `• ${m.content}`));
+      lines.push("", "כדי שאשכח משהו, כתבי למשל: תשכחי את מה שאמרתי על...");
+      await send(chatId, lines.join("\n"));
+      return true;
+    }
     case "invoices":
       return false; // handled by the model, with a ready-made request (see handleMessage)
   }
@@ -1039,6 +1144,19 @@ async function handleCallback(q: any) {
     const rows = (q.message.reply_markup?.inline_keyboard ?? []).filter((r: any[]) => r[0]?.callback_data !== q.data);
     await tg("editMessageReplyMarkup", { chat_id: chatId, message_id: q.message.message_id, reply_markup: { inline_keyboard: rows } });
     if (task) await remember(chatId, `סימנתי כבוצעה: ${task.title}`, "מעולה, סימנתי ✅");
+    return;
+  }
+
+  if (kind === "snz" && a && b) {
+    const { data: task } = await db.from("tasks").select("title,snooze_count").eq("id", a).maybeSingle();
+    if (!task) { await answer("המשימה לא נמצאה"); return; }
+    const days = Number(b) === 7 ? 7 : 1;
+    const due = addDays(israelNow().date, days);
+    await db.from("tasks").update({ due_on: due, reminded_on: null, snooze_count: (task.snooze_count ?? 0) + 1 }).eq("id", a);
+    await answer(days === 1 ? "נדחה למחר" : "נדחה לשבוע הבא");
+    await tg("editMessageReplyMarkup", { chat_id: chatId, message_id: q.message.message_id, reply_markup: { inline_keyboard: [] } });
+    await send(chatId, `⏭ ${task.title}: עבר ל-${due}.`);
+    await remember(chatId, `דחיתי את המשימה "${task.title}" ל-${due}`, "נדחה ✅");
     return;
   }
 
@@ -1147,12 +1265,77 @@ async function handleMessage(msg: any) {
   }
 }
 
+// ---------- Shabbat and holidays ----------
+// Candle lighting to havdalah from Hebcal, for Ramat Gan, cached in quiet_windows.
+// Quiet starts 30 minutes before candle lighting and ends 10 minutes after havdalah.
+const HEBCAL_LOCATION = { latitude: "32.0823", longitude: "34.8106", tzid: TZ };
+
+async function quietWindows(): Promise<{ start: number; end: number }[]> {
+  const now = Date.now();
+  const { data } = await db.from("quiet_windows").select("start_at,end_at")
+    .gt("end_at", new Date(now - 864e5).toISOString()).order("start_at");
+  const rows = (data ?? []).map((w) => ({ start: Date.parse(w.start_at), end: Date.parse(w.end_at) }));
+  // Refresh about once a month, when fewer than 30 days are left in the cache.
+  if (rows.length && rows[rows.length - 1].end > now + 30 * 864e5) return rows;
+  try {
+    const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+    const url = new URL("https://www.hebcal.com/hebcal");
+    for (const [k, v] of Object.entries({
+      v: "1", cfg: "json", maj: "on", c: "on", i: "on", geo: "pos", ...HEBCAL_LOCATION,
+      start: day(now - 2 * 864e5), end: day(now + 120 * 864e5),
+    })) url.searchParams.set(k, v);
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) throw new Error(`Hebcal ${res.status}`);
+    const { items } = await res.json() as { items: { category: string; date: string }[] };
+    const events = items.filter((e) => e.category === "candles" || e.category === "havdalah")
+      .map((e) => ({ kind: e.category, at: Date.parse(e.date) })).sort((a, b) => a.at - b.at);
+    const windows: { start: number; end: number }[] = [];
+    let open: number | null = null;
+    for (const e of events) {
+      if (e.kind === "candles" && open === null) open = e.at;
+      else if (e.kind === "havdalah" && open !== null) {
+        windows.push({ start: open - 30 * 60e3, end: e.at + 10 * 60e3 });
+        open = null;
+      }
+    }
+    if (!windows.length) throw new Error("Hebcal returned no windows");
+    await db.from("quiet_windows").upsert(windows.map((w) => ({
+      start_at: new Date(w.start).toISOString(), end_at: new Date(w.end).toISOString(), fetched_at: new Date().toISOString(),
+    })), { onConflict: "start_at" });
+    return windows;
+  } catch (e) {
+    // Hebcal down: carry on with what is cached rather than stop every reminder. Retries next minute.
+    console.error("hebcal refresh failed", e);
+    return rows;
+  }
+}
+
+const isQuiet = (windows: { start: number; end: number }[], at = Date.now()) => windows.some((w) => at >= w.start && at < w.end);
+
+function addDays(isoDate: string, n: number) {
+  const d = new Date(`${isoDate}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+// Buttons on a deadline message: done, or push it to tomorrow or next week.
+const followupButtons = (taskId: string) => ({
+  inline_keyboard: [[
+    { text: "✅ בוצע", callback_data: `done:${taskId}` },
+    { text: "מחר", callback_data: `snz:${taskId}:1` },
+    { text: "שבוע הבא", callback_data: `snz:${taskId}:7` },
+  ]],
+});
+
 // ---------- reminders (cron) ----------
 async function runCron() {
+  // Nothing goes out on Shabbat or a holiday. What came due waits, and goes out once it ends.
+  if (isQuiet(await quietWindows())) return { ok: true, quiet: true };
+
   const all = await partners();
-  const sendTo = async (partnerId: string | null, text: string) => {
+  const sendTo = async (partnerId: string | null, text: string, markup?: unknown) => {
     for (const p of all) {
-      if ((partnerId === null || p.id === partnerId) && p.telegram_chat_id) await send(p.telegram_chat_id, text);
+      if ((partnerId === null || p.id === partnerId) && p.telegram_chat_id) await send(p.telegram_chat_id, text, markup);
     }
   };
   const nowIso = new Date().toISOString();
@@ -1176,11 +1359,15 @@ async function runCron() {
 
   // 3. task deadlines, once a day from 08:00
   if (now.hour >= 8) {
-    const { data: tasks } = await db.from("tasks").select("id,title,due_on,assignee_partner_id")
+    const { data: tasks } = await db.from("tasks").select("id,title,due_on,assignee_partner_id,snooze_count")
       .neq("status", "done").lte("due_on", now.date).or(`reminded_on.is.null,reminded_on.lt.${now.date}`);
     for (const t of tasks ?? []) {
       const late = t.due_on < now.date ? " (באיחור)" : " (היום)";
-      await sendTo(t.assignee_partner_id, `📌 דדליין${late}: ${t.title}`);
+      // After three pushes, ask what is really going on instead of nagging again.
+      const stuck = t.snooze_count >= 3
+        ? `\nנדחתה כבר ${t.snooze_count} פעמים. אולי לפרק אותה לצעד קטן אחד, להעביר, או לוותר עליה? אפשר לכתוב לי.`
+        : "";
+      await sendTo(t.assignee_partner_id, `📌 דדליין${late}: ${t.title}${stuck}`, followupButtons(t.id));
       await db.from("tasks").update({ reminded_on: now.date }).eq("id", t.id);
     }
   }

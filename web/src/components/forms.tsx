@@ -170,12 +170,14 @@ export function SettlementForm({ from, to, amount, onDone }: { from?: string; to
 
 export function TaskForm({ row, projectId, startOn, onDone }: { row?: Task; projectId?: string; startOn?: string; onDone: () => void }) {
   const save = useSave("tasks");
+  const me = useMe();
   const plans = useWorkPlans();
   const [f, setF] = useState({
     title: row?.title ?? "", description: row?.description ?? "", project_id: row?.project_id ?? projectId ?? "",
     assignee_partner_id: row?.assignee_partner_id ?? "", due_on: row?.due_on ?? "", priority: String(row?.priority ?? 2),
     start_on: row?.start_on ?? startOn ?? "", work_plan_id: row?.work_plan_id ?? "",
   });
+  const [priv, setPriv] = useState(row?.is_private ?? false);
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -183,7 +185,9 @@ export function TaskForm({ row, projectId, startOn, onDone }: { row?: Task; proj
       id: row?.id,
       values: {
         title: f.title, description: nullIfEmpty(f.description), project_id: nullIfEmpty(f.project_id),
-        assignee_partner_id: nullIfEmpty(f.assignee_partner_id), due_on: nullIfEmpty(f.due_on), priority: Number(f.priority),
+        // A private task belongs to whoever marks it private; only she sees it.
+        assignee_partner_id: priv ? (row?.is_private ? row.assignee_partner_id : me?.id ?? null) : nullIfEmpty(f.assignee_partner_id),
+        is_private: priv, due_on: nullIfEmpty(f.due_on), priority: Number(f.priority),
         start_on: nullIfEmpty(f.start_on), work_plan_id: nullIfEmpty(f.work_plan_id),
         ...(row && f.due_on !== row.due_on ? { reminded_on: null } : {}),
       },
@@ -194,7 +198,7 @@ export function TaskForm({ row, projectId, startOn, onDone }: { row?: Task; proj
     <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
       <div className="sm:col-span-2"><Field label="משימה"><Input required value={f.title} onChange={(e) => set("title")(e.target.value)} /></Field></div>
       <Field label="פרויקט"><ProjectSelect value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" /></Field>
-      <Field label="אחראית"><PartnerSelect value={f.assignee_partner_id} onChange={set("assignee_partner_id")} allowNone="שתינו" /></Field>
+      {!priv && <Field label="אחראית"><PartnerSelect value={f.assignee_partner_id} onChange={set("assignee_partner_id")} allowNone="שתינו" /></Field>}
       <Field label="מתחילה"><Input type="date" value={f.start_on} onChange={(e) => set("start_on")(e.target.value)} /></Field>
       <Field label="דדליין"><Input type="date" value={f.due_on} onChange={(e) => set("due_on")(e.target.value)} /></Field>
       <Field label="שייכת ליעד">
@@ -209,6 +213,10 @@ export function TaskForm({ row, projectId, startOn, onDone }: { row?: Task; proj
         </Select>
       </Field>
       <div className="sm:col-span-2"><Field label="פירוט"><Textarea value={f.description} onChange={(e) => set("description")(e.target.value)} /></Field></div>
+      <label className="flex items-center gap-2 text-[15px] sm:col-span-2">
+        <input type="checkbox" checked={priv} onChange={(e) => setPriv(e.target.checked)} className="size-4 accent-[var(--pink)]" />
+        משימה אישית, רק אני רואה אותה
+      </label>
       <div className="sm:col-span-2"><Actions pending={save.isPending} error={save.error} onCancel={onDone} /></div>
     </form>
   );
