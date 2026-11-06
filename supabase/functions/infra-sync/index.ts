@@ -301,8 +301,8 @@ async function parseInvoice(bytes: Uint8Array, mime: string): Promise<Parsed> {
 
 type Line = { name: string; ref: string; amount: number; items?: Item[] };
 // Raise to read stored invoices again (an invoice whose result.v is lower is read once more).
-// Re-reading for line items was tried (v2): each read took about a minute and the model returned
-// the project totals without items, so stored invoices are not read again.
+// With thinking off a read takes 10-20 seconds; to backfill line items, set result.v = 0 on the
+// stored rows and the next runs read them again (3 per run).
 const INVOICE_VERSION = 1;
 
 // Files an invoice's amounts on the Supabase services they belong to (by ref, else by project name).
@@ -311,6 +311,8 @@ async function applyInvoice(sourceKey: string, parsed: Parsed) {
     throw new Error(NOT_INVOICE);
   }
   const month = `${parsed.period_month}-01`;
+  // A read that found the total but no project lines is a bad read: keep what is stored, try again next run.
+  if (!parsed.projects?.length && (parsed.total ?? 0) > 0) throw new Error(`invoice ${parsed.period_month}: no project lines read`);
   // Names of the Supabase projects, to match an invoice line that shows only a name.
   let names = new Map<string, string>(); // lower name -> ref
   if (keyOf("supabase")) {
