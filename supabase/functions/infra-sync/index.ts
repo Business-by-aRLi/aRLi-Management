@@ -335,8 +335,11 @@ async function gmailInvoices(full: boolean) {
       if (!ids.length) continue;
       const { data: seen } = await db.from("infra_invoice_imports").select("source_key").in("source_key", ids.map((i) => `gmail:${i}`));
       const done = new Set((seen ?? []).map((r) => r.source_key));
+      // Each invoice takes a model call of 20-40 seconds, so a run reads at most 3; the next run continues.
+      let budget = 3;
       for (const id of ids) {
         if (done.has(`gmail:${id}`)) continue;
+        if (budget-- <= 0) { report.push("ממשיך בסנכרון הבא"); break; }
         const m = await g(`messages/${id}`, { format: "full" });
         // deno-lint-ignore no-explicit-any
         const pdfs: any[] = [];
@@ -460,7 +463,7 @@ Deno.serve(async (req) => {
   try { await reapplyInvoices(); } catch (e) { errors.push(`invoices: ${(e as Error).message}`); }
 
   // Supabase invoices from Gmail (daily run, and "sync now" from the Connections screen).
-  if (req.headers.get("x-cron-secret") || body.gmail) {
+  if (body.gmail ?? !!req.headers.get("x-cron-secret")) {
     const g = await gmailInvoices(!!body.full);
     if (g.report.length) report.supabase_invoice = g.report.join(" · ");
     errors.push(...g.errors);
