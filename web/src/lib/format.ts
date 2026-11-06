@@ -15,5 +15,9 @@ export const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Je
 // A project's type is shown as a tag on it, not as a separate section.
 export const PROJECT_TAG: Record<string, string> = { client: "לקוח", business: "עסקי", learning: "למידה" };
 export const PROJECT_TYPE = PROJECT_TAG;
-export const PROJECT_STATUS: Record<string, string> = { active: "פעיל", paused: "מושהה", closed: "סגור" };
+// Project lifecycle, in order. "paused" and "closed" are old values, shown as archive.
+export const PROJECT_STAGES = [["planning", "בתכנון"], ["setup", "בהקמה"], ["implementation", "בהטמעה"], ["active", "פעיל"], ["archived", "ארכיון"]] as const;
+export const PROJECT_STATUS: Record<string, string> = { ...Object.fromEntries(PROJECT_STAGES), paused: "ארכיון", closed: "ארכיון" };
+export const isArchived = (status: string) => status === "archived" || status === "closed" || status === "paused";
+export const stageIndex = (status: string) => isArchived(status) ? 4 : Math.max(0, PROJECT_STAGES.findIndex(([k]) => k === status));
 export const TASK_STATUS: Record<string, string> = { todo: "לביצוע", in_progress: "בעבודה", done: "בוצע" };

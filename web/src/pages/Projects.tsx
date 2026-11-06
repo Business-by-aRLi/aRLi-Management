@@ -1,12 +1,15 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useFinancials, useProjects, useSave, useTasks, useTime, type Financials, type Project } from "../lib/data";
-import { hours, money, PROJECT_STATUS, PROJECT_TAG, today } from "../lib/format";
-import { Button, Empty, Field, Input, Loading, Modal, Num, PageTitle, Pill, Progress, SearchInput, Segmented, Select, Tag } from "../components/ui";
+import { hours, isArchived, money, PROJECT_STAGES, PROJECT_TAG, stageIndex, today } from "../lib/format";
+import { StageMini } from "../components/Stage";
+import { Button, Empty, Field, Input, Loading, Modal, Num, PageTitle, Progress, SearchInput, Segmented, Select, Tag } from "../components/ui";
 import { ClientPicker, resolveClient, type ClientChoice } from "../components/ClientPicker";
 
-type StatusFilter = "open" | "closed" | "all";
-const STATUS_ORDER: Record<string, number> = { active: 0, paused: 1, closed: 2 };
+// Live projects first, then the ones still being built, the archive last.
+const rank = (s: string) => isArchived(s) ? 9 : 3 - stageIndex(s);
+// "open" = every stage except the archive.
+type StatusFilter = "open" | "all" | (typeof PROJECT_STAGES)[number][0];
 
 export default function Projects() {
   const projects = useProjects();
@@ -19,14 +22,14 @@ export default function Projects() {
   const [query, setQuery] = useState("");
 
   const byStatus = useMemo(() => (projects.data ?? []).filter((p) =>
-    status === "all" ? true : status === "closed" ? p.status === "closed" : p.status !== "closed"), [projects.data, status]);
+    status === "all" ? true : status === "open" ? !isArchived(p.status) : status === "archived" ? isArchived(p.status) : p.status === status), [projects.data, status]);
   if (projects.isLoading) return <Loading />;
 
   const q = query.trim().toLowerCase();
   const list = byStatus
     .filter((p) => !tag || p.type === tag)
     .filter((p) => !q || p.name.toLowerCase().includes(q) || p.clients?.name?.toLowerCase().includes(q))
-    .sort((a, b) => (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9) || a.name.localeCompare(b.name, "he"));
+    .sort((a, b) => rank(a.status) - rank(b.status) || a.name.localeCompare(b.name, "he"));
   const count = (t: string) => byStatus.filter((p) => p.type === t).length;
   const openTasks = (id: string) => tasks.data?.filter((t) => t.project_id === id && t.status !== "done").length ?? 0;
   const minutes = (id: string) => (time.data ?? []).filter((t) => t.project_id === id).reduce((s, t) => s + t.minutes, 0);
@@ -39,7 +42,7 @@ export default function Projects() {
 
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <SearchInput value={query} onChange={setQuery} placeholder="חיפוש פרויקט או לקוח" />
-        <Segmented label="סטטוס" value={status} onChange={setStatus} options={[["open", "פתוחים"], ["closed", "סגורים"], ["all", "הכל"]]} />
+        <Segmented label="סטטוס" value={status} onChange={setStatus} options={[["open", "בעבודה"], ...PROJECT_STAGES.map(([k, v]) => [k, v] as [StatusFilter, string]), ["all", "הכל"]]} />
         <div className="flex flex-wrap gap-2" role="group" aria-label="סינון לפי תגית">
           <TagChip active={!tag} onClick={() => setTag("")}>הכל <Num className="text-mute">{byStatus.length}</Num></TagChip>
           {Object.entries(PROJECT_TAG).map(([k, v]) => count(k) > 0 && (
@@ -74,11 +77,11 @@ export function ProjectCard({ p, f, tasks, minutes }: { p: Project; f?: Financia
   const income = Number(f?.income ?? 0);
   const price = p.agreed_price != null ? Number(p.agreed_price) : null;
   return (
-    <Link to={`/projects/${p.id}`} className={`bezel lift group block ${p.status === "closed" ? "opacity-60" : ""}`}>
+    <Link to={`/projects/${p.id}`} className={`bezel lift group block ${isArchived(p.status) ? "opacity-60" : ""}`}>
       <div className="core flex flex-col gap-4">
         <div className="flex items-center justify-between gap-2">
           <Tag type={p.type} label={PROJECT_TAG[p.type] ?? p.type} />
-          {p.status !== "active" && <Pill>{PROJECT_STATUS[p.status]}</Pill>}
+          <StageMini status={p.status} />
         </div>
         <div>
           <h2 className="text-[24px] font-semibold leading-tight transition-colors group-hover:text-pink-soft">{p.name}</h2>
@@ -102,7 +105,7 @@ export function ProjectCard({ p, f, tasks, minutes }: { p: Project; f?: Financia
 
 export function NewProject({ onDone, onCancel, clientId, name = "", type = "client" }: { onDone: () => void; onCancel?: () => void; clientId?: string; name?: string; type?: string }) {
   const save = useSave("projects");
-  const [f, setF] = useState({ name, type, agreed_price: "" });
+  const [f, setF] = useState({ name, type, status: "planning", agreed_price: "" });
   const [client, setClient] = useState<ClientChoice>({ id: clientId ?? "", newName: "" });
   const [error, setError] = useState("");
   return (
@@ -111,7 +114,7 @@ export function NewProject({ onDone, onCancel, clientId, name = "", type = "clie
       setError("");
       try {
         const client_id = await resolveClient(client);
-        await save.mutateAsync({ values: { name: f.name.trim(), type: f.type, client_id, agreed_price: f.agreed_price ? Number(f.agreed_price) : null, started_on: today() } });
+        await save.mutateAsync({ values: { name: f.name.trim(), type: f.type, status: f.status, client_id, agreed_price: f.agreed_price ? Number(f.agreed_price) : null, started_on: today() } });
         onDone();
       } catch (err) { setError((err as Error).message); }
     }}>
@@ -119,6 +122,11 @@ export function NewProject({ onDone, onCancel, clientId, name = "", type = "clie
       <Field label="תגית">
         <Select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })}>
           {Object.entries(PROJECT_TAG).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </Select>
+      </Field>
+      <Field label="שלב">
+        <Select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>
+          {PROJECT_STAGES.slice(0, 4).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </Select>
       </Field>
       <Field label="לקוח"><ClientPicker value={client} onChange={setClient} /></Field>

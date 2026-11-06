@@ -299,11 +299,11 @@ const toolDeclarations = [
   },
   {
     name: "update_project",
-    description: "עדכון פרויקט: סטטוס, מחיר מוסכם, או חלוקת רווח (אחוז של מירי, ריקי מקבלת את השאר).",
+    description: "עדכון פרויקט: שלב (בתכנון, בהקמה, בהטמעה, פעיל, ארכיון), מחיר מוסכם, או חלוקת רווח (אחוז של מירי, ריקי מקבלת את השאר).",
     parameters: S("object", undefined, {
       properties: {
         project_name: S("string"),
-        status: S("string", undefined, { enum: ["active", "paused", "closed"] }),
+        status: S("string", "שלב: planning=בתכנון, setup=בהקמה, implementation=בהטמעה, active=פעיל, archived=ארכיון", { enum: ["planning", "setup", "implementation", "active", "archived"] }),
         agreed_price: S("number"),
         miri_percent: S("number", "אחוז הרווח של מירי, 0 עד 100"),
       },
@@ -313,7 +313,7 @@ const toolDeclarations = [
   { name: "get_balance", description: "ההתחשבנות בין שלושה צדדים: העסק, מירי וריקי. כמה כל אחת השקיעה, מה הרווח של העסק, כמה כל אחת קיבלה, ומי מעבירה למי כדי להתאזן.", parameters: S("object", undefined, { properties: {} }) },
   {
     name: "list_projects", description: "רשימת פרויקטים עם הכנסות, הוצאות ורווח.",
-    parameters: S("object", undefined, { properties: { status: S("string", undefined, { enum: ["active", "paused", "closed"] }) } }),
+    parameters: S("object", undefined, { properties: { status: S("string", "שלב: planning=בתכנון, setup=בהקמה, implementation=בהטמעה, active=פעיל, archived=ארכיון", { enum: ["planning", "setup", "implementation", "active", "archived"] }) } }),
   },
   {
     name: "list_transactions",
@@ -634,7 +634,7 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
       const project = await projectByName(a.project_name);
       if (!project) throw new Error("חסר שם פרויקט");
       const patch: Record<string, unknown> = {};
-      if (a.status) { patch.status = a.status; if (a.status === "closed") patch.closed_on = ctx.today; }
+      if (a.status) { patch.status = a.status; patch.closed_on = a.status === "archived" ? ctx.today : null; }
       if (a.agreed_price != null) patch.agreed_price = a.agreed_price;
       if (Object.keys(patch).length) check(await db.from("projects").update(patch).eq("id", project.id));
       if (a.miri_percent != null) {
