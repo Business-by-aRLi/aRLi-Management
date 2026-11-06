@@ -102,23 +102,26 @@ async function whoToIds(who: string | undefined, fallback: Partner | null): Prom
 }
 
 // Events and Google busy blocks that overlap a time, for the people taking part.
-async function findConflicts(startsAt: string, endsAt: string, partnerIds: string[]) {
+// Private events of the other partner, and her personal Google events, show only as "busy" without a title.
+async function findConflicts(me: Partner, startsAt: string, endsAt: string, partnerIds: string[]) {
   const all = await partners();
   const ids = partnerIds.length ? partnerIds : all.map((p) => p.id);
   const end = endsAt > startsAt ? endsAt : new Date(new Date(startsAt).getTime() + 3600e3).toISOString();
-  const { data: evs } = await db.from("meetings").select("id,title,starts_at,ends_at,partner_ids,all_day")
+  const { data: evs } = await db.from("meetings").select("id,title,starts_at,ends_at,partner_ids,all_day,is_private,created_by_partner_id")
     .lt("starts_at", end).gte("starts_at", new Date(new Date(startsAt).getTime() - 864e5).toISOString());
   const out: { id?: string; title: string; local: string; who?: string }[] = [];
   for (const m of evs ?? []) {
     const mEnd = m.ends_at ?? new Date(new Date(m.starts_at).getTime() + 3600e3).toISOString();
     if (m.all_day || mEnd <= startsAt) continue;
     if (m.partner_ids?.length && !m.partner_ids.some((x: string) => ids.includes(x))) continue;
-    out.push({ id: m.id, title: m.title, local: fmtDateTime(m.starts_at) });
+    const hidden = m.is_private && m.created_by_partner_id !== me.id;
+    out.push({ id: m.id, title: hidden ? "אירוע פרטי" : m.title, local: fmtDateTime(m.starts_at), who: hidden ? all.find((p) => p.id === m.created_by_partner_id)?.name : undefined });
   }
-  const { data: busy } = await db.from("partner_busy").select("partner_id,starts_at,ends_at")
+  const { data: busy } = await db.from("partner_busy").select("partner_id,starts_at,ends_at,title")
     .in("partner_id", ids).lt("starts_at", end).gt("ends_at", startsAt);
   for (const b of busy ?? []) {
-    out.push({ title: "תפוסה ביומן האישי", local: fmtDateTime(b.starts_at), who: all.find((p) => p.id === b.partner_id)?.name });
+    const title = b.partner_id === me.id && b.title ? `${b.title} (ביומן האישי)` : "תפוסה ביומן האישי";
+    out.push({ title, local: fmtDateTime(b.starts_at), who: all.find((p) => p.id === b.partner_id)?.name });
   }
   return out.slice(0, 6);
 }
@@ -141,6 +144,9 @@ function check<T>(res: { data: T; error: { message: string } | null }): T {
 
 // Shared tasks plus this partner's own private ones. The other partner's private tasks never reach the bot.
 const visibleTasks = (me: Partner) => `is_private.eq.false,assignee_partner_id.eq.${me.id}`;
+
+// Shared events plus this partner's own private ones. The other partner's private events never reach the bot.
+const visibleMeetings = (me: Partner) => `is_private.eq.false,created_by_partner_id.eq.${me.id}`;
 
 // Passwords, API keys and card numbers never go into memory.
 const looksSecret = (t: string) =>
@@ -236,6 +242,7 @@ const toolDeclarations = [
         location: S("string"), project_name: S("string"), notes: S("string", "אג'נדה או הערות"),
         task_id: S("string", "כשחוסמים זמן למשימה קיימת: ה-id שלה מ-list_tasks"),
         meet: S("boolean", "ליצור קישור Google Meet (ברירת מחדל: כן לפגישה אונליין בלי מקום פיזי)"),
+        private: S("boolean", "true רק כשהשותפה אמרה במפורש שזה פרטי/אישי. אירוע פרטי נראה רק לה, נכנס רק ליומן Google האישי שלה, והשותפה השנייה רואה רק \"תפוסה\""),
       },
       required: ["title", "starts_at"],
     }),
@@ -249,6 +256,7 @@ const toolDeclarations = [
         location: S("string"), notes: S("string"), who: S("string", undefined, { enum: ["מירי", "ריקי", "שתינו"] }),
         kind: S("string", undefined, { enum: ["meeting", "focus", "away"] }),
         meet: S("boolean", "להוסיף קישור Google Meet"), cancel: S("boolean"),
+        private: S("boolean", "להפוך לפרטי (true, רק של הכותבת) או למשותף (false)"),
       },
       required: ["id"],
     }),
@@ -551,29 +559,30 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
     case "add_meeting": {
       const project = await projectByName(a.project_name);
       const kind = ["meeting", "focus", "away"].includes(a.kind) ? a.kind : "meeting";
-      const partnerIds = await whoToIds(a.who, kind === "meeting" ? null : me);
+      const isPrivate = a.private === true;
+      const partnerIds = isPrivate ? [me.id] : await whoToIds(a.who, kind === "meeting" ? null : me);
       const startsAt = new Date(a.starts_at).toISOString();
       const endsAt = a.ends_at ? new Date(a.ends_at).toISOString() : a.all_day ? startsAt : new Date(new Date(startsAt).getTime() + 3600e3).toISOString();
-      const conflicts = await findConflicts(startsAt, endsAt, partnerIds);
+      const conflicts = await findConflicts(me, startsAt, endsAt, isPrivate ? [me.id] : partnerIds);
       const row = check(await db.from("meetings").insert({
         title: a.title, starts_at: startsAt, ends_at: endsAt, all_day: !!a.all_day, kind, partner_ids: partnerIds,
         location: a.location ?? null, project_id: project?.id ?? null, notes: a.notes ?? null, created_by_partner_id: me.id,
-        task_id: a.task_id ?? null, want_meet: a.meet ?? (kind === "meeting" && !a.location),
+        task_id: a.task_id ?? null, want_meet: a.meet ?? (kind === "meeting" && !a.location && !isPrivate), is_private: isPrivate,
       }).select("id,starts_at").single()) as { id: string; starts_at: string };
       const label = kind === "focus" ? "חסמה זמן לעבודה" : kind === "away" ? "סימנה שהיא לא זמינה" : "קבעה פגישה";
-      await notifyOthers(me, `📅 ${me.name} ${label}: ${a.title}, ${fmtDateTime(row.starts_at)}${a.location ? `, ${a.location}` : ""}`);
+      if (!isPrivate) await notifyOthers(me, `📅 ${me.name} ${label}: ${a.title}, ${fmtDateTime(row.starts_at)}${a.location ? `, ${a.location}` : ""}`);
       EdgeRuntime.waitUntil(runCalendarSync(db).catch(console.error));
       return {
-        ok: true, id: row.id, starts_at_local: fmtDateTime(row.starts_at), conflicts,
-        note: (await googleSynced()) ? "נכנס גם ליומן Google המשותף" + (kind === "meeting" ? ", ותזכורת תישלח שעה לפני" : "") : "תזכורת תישלח שעה לפני",
+        ok: true, id: row.id, starts_at_local: fmtDateTime(row.starts_at), conflicts, private: isPrivate,
+        note: isPrivate ? "פרטי: רק את רואה אותו, והוא נכנס רק ליומן Google האישי שלך (אם הוא מחובר). השותפה רואה רק תפוסה." : (await googleSynced()) ? "נכנס גם ליומן Google המשותף" + (kind === "meeting" ? ", ותזכורת תישלח שעה לפני" : "") : "תזכורת תישלח שעה לפני",
       };
     }
     case "update_meeting": {
-      const { data: old } = await db.from("meetings").select("id,title,starts_at,ends_at,partner_ids").eq("id", a.id).maybeSingle();
+      const { data: old } = await db.from("meetings").select("id,title,starts_at,ends_at,partner_ids,is_private").eq("id", a.id).or(visibleMeetings(me)).maybeSingle();
       if (!old) throw new Error("האירוע לא נמצא");
       if (a.cancel) {
         check(await db.from("meetings").delete().eq("id", a.id));
-        await notifyOthers(me, `🗑 ${me.name} ביטלה: ${old.title}, ${fmtDateTime(old.starts_at)}`);
+        if (!old.is_private) await notifyOthers(me, `🗑 ${me.name} ביטלה: ${old.title}, ${fmtDateTime(old.starts_at)}`);
         EdgeRuntime.waitUntil(runCalendarSync(db).catch(console.error));
         return { ok: true, cancelled: true };
       }
@@ -582,6 +591,9 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
       if (a.kind) patch.kind = a.kind;
       if (a.who) patch.partner_ids = await whoToIds(a.who, null);
       if (a.meet) patch.want_meet = true;
+      if (a.private === true) { patch.is_private = true; patch.created_by_partner_id = me.id; }
+      if (a.private === false) patch.is_private = false;
+      const nowPrivate = a.private ?? old.is_private;
       if (a.starts_at) {
         patch.starts_at = new Date(a.starts_at).toISOString();
         // Moving keeps the length unless a new end was given.
@@ -590,8 +602,8 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
       } else if (a.ends_at) patch.ends_at = new Date(a.ends_at).toISOString();
       check(await db.from("meetings").update(patch).eq("id", a.id));
       const s = (patch.starts_at as string) ?? old.starts_at, e = (patch.ends_at as string) ?? old.ends_at ?? s;
-      const conflicts = (await findConflicts(s, e, (patch.partner_ids as string[]) ?? old.partner_ids)).filter((c) => c.id !== a.id);
-      if (a.starts_at) await notifyOthers(me, `🔁 ${me.name} הזיזה: ${old.title} ל-${fmtDateTime(s)}`);
+      const conflicts = (await findConflicts(me, s, e, (patch.partner_ids as string[]) ?? old.partner_ids)).filter((c) => c.id !== a.id);
+      if (a.starts_at && !nowPrivate) await notifyOthers(me, `🔁 ${me.name} הזיזה: ${old.title} ל-${fmtDateTime(s)}`);
       EdgeRuntime.waitUntil(runCalendarSync(db).catch(console.error));
       return { ok: true, starts_at_local: fmtDateTime(s), conflicts };
     }
@@ -702,12 +714,16 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
     case "list_schedule": {
       const from = a.from ? `${a.from}T00:00:00${israelNow().offset}` : new Date().toISOString();
       const to = a.to ? `${a.to}T23:59:59${israelNow().offset}` : new Date(Date.now() + 7 * 864e5).toISOString();
-      const meetings = check(await db.from("meetings").select("id,title,starts_at,ends_at,all_day,kind,partner_ids,location,meet_link,notes,projects(name)")
-        .gte("starts_at", from).lte("starts_at", to).order("starts_at")) as { starts_at: string }[];
+      const meetings = check(await db.from("meetings").select("id,title,starts_at,ends_at,all_day,kind,partner_ids,is_private,location,meet_link,notes,projects(name)")
+        .or(visibleMeetings(me)).gte("starts_at", from).lte("starts_at", to).order("starts_at")) as { starts_at: string }[];
+      // Her own personal Google events (read only here; to change them, use Google Calendar).
+      const personal = check(await db.from("partner_busy").select("title,starts_at,ends_at,all_day")
+        .eq("partner_id", me.id).not("title", "is", null).lt("starts_at", to).gt("ends_at", from).order("starts_at")) as { starts_at: string }[];
       const reminders = check(await db.from("reminders").select("id,message,remind_at,sent_at")
         .gte("remind_at", from).lte("remind_at", to).order("remind_at")) as { remind_at: string }[];
       return {
         meetings: meetings.map((m) => ({ ...m, local: fmtDateTime(m.starts_at) })),
+        my_personal_google_events: personal.map((m) => ({ ...m, local: fmtDateTime(m.starts_at) })),
         reminders: reminders.map((r) => ({ ...r, local: fmtDateTime(r.remind_at) })),
       };
     }
@@ -973,7 +989,7 @@ function systemPrompt(me: Partner, memories: { id: string; content: string; part
 - משימות אישיות: כל משימה נרשמת ככללית (גלויה לשתיכן), אלא אם ${me.name} אמרה במפורש שהיא אישית ("משימה אישית", "אישי", "פרטי"). אז רשמי עם private=true, ורק היא תראה אותה. אם משימה נשמעת אישית אבל לא נאמר כך, רשמי ככללית ושאלי בסוף התשובה אם להפוך אותה לאישית.
 - אפשר להפוך משימה קיימת לאישית או לכללית עם update_task (private).
 - זיכרון: כשמספרים לך משהו קבוע ("תזכרי ש...", העדפה, איש קשר, החלטה), שמרי עם remember_fact. כשמבקשים לשכוח או מתקנים עובדה, מחקי עם forget_fact (ואם זה תיקון, שמרי את הגרסה הנכונה). אל תשמרי כל פרט מהשיחה, רק מה שיעזור גם בעוד חודש.
-- יומן: היומן המשותף מסונכרן ל-Google Calendar (יומן בשם aRLi). יש בו שלושה סוגים: פגישה (meeting), בלוק עבודה (focus) ולא זמינה (away). "אני עובדת על X מחר 9-12" = בלוק עבודה. "אני בחופש ביום שלישי" = לא זמינה, all_day. לפני שקובעים פגישה לשתיהן בלי שעה ברורה, הציעי זמנים עם find_free_time. כש-add_meeting או update_meeting מחזירים conflicts, ספרי עליהם בקצרה ושאלי אם להשאיר. להזזה ולביטול: list_schedule ואז update_meeting. כשמבקשים לחסום זמן למשימה, מצאי אותה עם list_tasks והעבירי task_id. אם החיבור ליומן Google לא קיים והשותפה שואלת עליו, הפעילי connect_google.
+- יומן: היומן המשותף מסונכרן ל-Google Calendar (יומן בשם aRLi). יש בו שלושה סוגים: פגישה (meeting), בלוק עבודה (focus) ולא זמינה (away). "אני עובדת על X מחר 9-12" = בלוק עבודה. "אני בחופש ביום שלישי" = לא זמינה, all_day. לפני שקובעים פגישה לשתיהן בלי שעה ברורה, הציעי זמנים עם find_free_time. כש-add_meeting או update_meeting מחזירים conflicts, ספרי עליהם בקצרה ושאלי אם להשאיר. להזזה ולביטול: list_schedule ואז update_meeting. כשמבקשים לחסום זמן למשימה, מצאי אותה עם list_tasks והעבירי task_id. אם החיבור ליומן Google לא קיים והשותפה שואלת עליו, הפעילי connect_google. אירוע פרטי: רק כשהשותפה אומרת במפורש "פרטי" או "אישי", קבעי עם private=true. הוא נראה רק לה ונכנס רק ליומן Google האישי שלה, והשותפה השנייה רואה רק "תפוסה". האירועים מיומן הגוגל האישי שלה מופיעים ב-list_schedule תחת my_personal_google_events; הם שלה בלבד, ואסור לספר עליהם לשותפה השנייה. כשאת מדברת עם שותפה אחת, לעולם אל תחשפי כותרות של אירועים פרטיים של השנייה.
 - סיכום פגישה: כשמספרים מה היה בפגישה, שמרי את עיקרי הדברים עם add_project_note (אם יש פרויקט), פתחי משימות לצעדים הבאים, ושאלי אם לרשום שעות.
 - פרויקטים: החלטה או סיכום חשוב על פרויקט נשמרים עם add_project_note. לשאלה "מה המצב ב..." או לפני הצעת מחיר, קראי get_project_notes.
 - ההיסטוריה עשויה לכלול שורות "[מידע פנימי: ...]" עם תוצאות כלים מתורות קודמות. השתמשי בהן (למשל ב-message_id וב-receipt_path), אבל לעולם אל תכתבי אותן בתשובה.
@@ -1160,17 +1176,20 @@ async function showToday(me: Partner, chatId: number) {
   const now = israelNow();
   const tasks = (await myOpenTasks(me)).filter((t) => t.due_on && t.due_on <= now.date);
   const from = `${now.date}T00:00:00${now.offset}`, to = `${now.date}T23:59:59${now.offset}`;
-  const meetings = (check(await db.from("meetings").select("title,starts_at,location,kind,all_day,partner_ids,meet_link")
-    .gte("starts_at", from).lte("starts_at", to).order("starts_at")) as
-    { title: string; starts_at: string; location: string | null; kind: string; all_day: boolean; partner_ids: string[]; meet_link: string | null }[])
-    .filter((m) => !m.partner_ids?.length || m.partner_ids.includes(me.id));
+  type Ev = { title: string; starts_at: string; location: string | null; kind: string; all_day: boolean; partner_ids: string[]; meet_link: string | null; is_private?: boolean };
+  const meetings = [
+    ...(check(await db.from("meetings").select("title,starts_at,location,kind,all_day,partner_ids,meet_link,is_private")
+      .or(visibleMeetings(me)).gte("starts_at", from).lte("starts_at", to).order("starts_at")) as Ev[])
+      .filter((m) => !m.partner_ids?.length || m.partner_ids.includes(me.id)),
+    ...(await myPersonalEvents(me, from, to)),
+  ].sort((x, y) => (x.all_day === y.all_day ? x.starts_at.localeCompare(y.starts_at) : x.all_day ? -1 : 1));
   const reminders = check(await db.from("reminders").select("message,remind_at").is("sent_at", null)
     .or(`partner_id.eq.${me.id},partner_id.is.null`).gte("remind_at", from).lte("remind_at", to).order("remind_at")) as { message: string; remind_at: string }[];
   const time = (iso: string) => new Date(iso).toLocaleTimeString("he-IL", { timeZone: TZ, hour: "2-digit", minute: "2-digit" });
 
   const lines = [`☀️ היום, ${now.date}`];
   lines.push("", "🗓 ביומן:", ...(meetings.length
-    ? meetings.map((m) => `${KIND_ICON[m.kind] ?? "•"} ${m.all_day ? "כל היום" : time(m.starts_at)} ${m.title}${m.location ? `, ${m.location}` : ""}${m.meet_link ? `\n   ${m.meet_link}` : ""}`)
+    ? meetings.map((m) => `${m.is_private ? "🔒" : KIND_ICON[m.kind] ?? "•"} ${m.all_day ? "כל היום" : time(m.starts_at)} ${m.title}${m.location ? `, ${m.location}` : ""}${m.meet_link ? `\n   ${m.meet_link}` : ""}`)
     : ["יום פתוח, בלי פגישות"]));
   if (reminders.length) lines.push("", "⏰ תזכורות:", ...reminders.map((r) => `• ${time(r.remind_at)} ${r.message}`));
   lines.push("", "📌 משימות להיום ובאיחור:", ...(tasks.length ? tasks.map((t) => taskLine(t, now.date)) : ["אין, כל הכבוד! 🎉"]));
@@ -1187,20 +1206,32 @@ async function showTasks(me: Partner, chatId: number) {
 
 const KIND_ICON: Record<string, string> = { meeting: "🗓", focus: "🎯", away: "🌴" };
 
+// Her own personal Google events, with titles, shown to her only (marked 🔒).
+async function myPersonalEvents(me: Partner, fromIso: string, toIso: string) {
+  const { data } = await db.from("partner_busy").select("title,starts_at,ends_at,all_day")
+    .eq("partner_id", me.id).not("title", "is", null).lt("starts_at", toIso).gte("starts_at", fromIso).order("starts_at");
+  return (data ?? []).map((b) => ({
+    title: b.title as string, starts_at: b.starts_at as string, all_day: b.all_day as boolean, kind: "meeting",
+    partner_ids: [me.id], location: null as string | null, meet_link: null as string | null, is_private: true,
+  }));
+}
+
 async function showWeek(me: Partner, chatId: number) {
   const now = israelNow();
   const end = addDays(now.date, 7);
   const all = await partners();
-  const { data: evs } = await db.from("meetings").select("title,starts_at,all_day,kind,partner_ids,location,meet_link")
-    .gte("starts_at", `${now.date}T00:00:00${now.offset}`).lt("starts_at", `${end}T00:00:00${now.offset}`).order("starts_at");
+  const { data: shared } = await db.from("meetings").select("title,starts_at,all_day,kind,partner_ids,location,meet_link,is_private")
+    .or(visibleMeetings(me)).gte("starts_at", `${now.date}T00:00:00${now.offset}`).lt("starts_at", `${end}T00:00:00${now.offset}`).order("starts_at");
+  const evs = [...(shared ?? []), ...(await myPersonalEvents(me, `${now.date}T00:00:00${now.offset}`, `${end}T00:00:00${now.offset}`))]
+    .sort((x, y) => x.starts_at.localeCompare(y.starts_at));
   const { data: tasks } = await db.from("tasks").select("title,due_on").neq("status", "done").or(visibleTasks(me))
     .gte("due_on", now.date).lt("due_on", end).order("due_on");
   const day = (iso: string) => new Date(iso).toLocaleDateString("he-IL", { timeZone: TZ, weekday: "long", day: "numeric", month: "numeric" });
   const hm = (iso: string) => new Date(iso).toLocaleTimeString("he-IL", { timeZone: TZ, hour: "2-digit", minute: "2-digit" });
   const groups = new Map<string, string[]>();
-  for (const m of evs ?? []) {
-    const who = m.partner_ids?.length ? ` (${m.partner_ids.map((id: string) => all.find((p) => p.id === id)?.name).join(", ")})` : "";
-    const line = `${KIND_ICON[m.kind] ?? "🗓"} ${m.all_day ? "כל היום" : hm(m.starts_at)} ${m.title}${who}${m.location ? `, ${m.location}` : ""}`;
+  for (const m of evs) {
+    const who = m.is_private ? "" : m.partner_ids?.length ? ` (${m.partner_ids.map((id: string) => all.find((p) => p.id === id)?.name).join(", ")})` : "";
+    const line = `${m.is_private ? "🔒" : KIND_ICON[m.kind] ?? "🗓"} ${m.all_day ? "כל היום" : hm(m.starts_at)} ${m.title}${who}${m.location ? `, ${m.location}` : ""}`;
     const k = day(m.starts_at); groups.set(k, [...(groups.get(k) ?? []), line]);
   }
   for (const t of tasks ?? []) {
@@ -1632,7 +1663,7 @@ async function runCron() {
       const { data: inc } = await db.from("income").select("amount").gte("received_on", weekAgo);
       const sum = (rows: { amount: number }[] | null) => (rows ?? []).reduce((s, r) => s + Number(r.amount), 0);
       const { count: ahead } = await db.from("meetings").select("id", { count: "exact", head: true })
-        .eq("kind", "meeting").gte("starts_at", nowIso).lt("starts_at", new Date(Date.now() + 7 * 864e5).toISOString());
+        .eq("kind", "meeting").eq("is_private", false).gte("starts_at", nowIso).lt("starts_at", new Date(Date.now() + 7 * 864e5).toISOString());
       await sendTo(null, `📊 סיכום שבועי\nהוצאות השבוע: ${fmtMoney(sum(exp))}\nהכנסות השבוע: ${fmtMoney(sum(inc))}\n` +
         `🗓 השבוע הקרוב: ${ahead ?? 0} פגישות. /week מראה הכל, ו-/free מוצא זמן משותף לבלוקי עבודה.`);
       await db.from("app_config").upsert({ key: "weekly_summary_sent", value: now.date });

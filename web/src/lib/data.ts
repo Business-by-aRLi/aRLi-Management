@@ -32,8 +32,10 @@ export type Meeting = {
   id: string; title: string; starts_at: string; ends_at: string | null; location: string | null; projects?: { name: string } | null;
   project_id?: string | null; notes?: string | null; kind: MeetingKind; partner_ids: string[]; all_day: boolean;
   meet_link: string | null; want_meet?: boolean; task_id: string | null; google_event_id: string | null; needs_push?: boolean;
+  is_private?: boolean; created_by_partner_id?: string | null;
 };
-export type Busy = { partner_id: string; starts_at: string; ends_at: string };
+// My personal Google events (with titles), and the other partner's personal and private events as "busy" (no title).
+export type Busy = { partner_id: string; starts_at: string; ends_at: string; all_day: boolean; title: string | null; source: "google" | "private" };
 export type GoogleConnection = { partner_id: string; email: string; connected_at: string; calendar: boolean };
 export type SyncStatus = { calendar_id: string | null; last_pull: string | null; last_error: string | null; pending: number };
 export type Slot = { starts_at: string; ends_at: string };
@@ -71,7 +73,7 @@ export const useTasks = () => q<Task[]>(["tasks"], () =>
 export const useMeetings = (fromIso: string, toIso: string) => q<Meeting[]>(["meetings", fromIso, toIso], () =>
   supabase.from("meetings").select("*,projects(name)").gte("starts_at", fromIso).lte("starts_at", toIso).order("starts_at"));
 export const useBusy = (fromIso: string, toIso: string) => q<Busy[]>(["busy", fromIso, toIso], () =>
-  supabase.from("partner_busy").select("*").lt("starts_at", toIso).gt("ends_at", fromIso).order("starts_at"));
+  supabase.from("calendar_busy").select("*").lt("starts_at", toIso).gt("ends_at", fromIso).order("starts_at"));
 export const useGoogleConnections = () => q<GoogleConnection[]>(["google"], () => supabase.from("google_connections").select("*"));
 export const useSyncStatus = () => useQuery<SyncStatus | null>({
   queryKey: ["sync-status"], refetchInterval: 60_000,

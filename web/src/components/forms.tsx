@@ -249,7 +249,7 @@ function useConflicts(startsLocal: string, endsLocal: string, partnerIds: string
       const [ev, busy] = await Promise.all([
         supabase.from("meetings").select("id,title,starts_at,ends_at,partner_ids,all_day").lt("starts_at", end)
           .gte("starts_at", new Date(new Date(start).getTime() - 864e5).toISOString()),
-        supabase.from("partner_busy").select("partner_id,starts_at,ends_at").lt("starts_at", end).gt("ends_at", start),
+        supabase.from("calendar_busy").select("partner_id,starts_at,ends_at,title,all_day").lt("starts_at", end).gt("ends_at", start),
       ]);
       const out: string[] = [];
       for (const m of (ev.data ?? []) as Meeting[]) {
@@ -259,7 +259,8 @@ function useConflicts(startsLocal: string, endsLocal: string, partnerIds: string
         out.push(`${m.title} (${new Date(m.starts_at).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })})`);
       }
       for (const b of busy.data ?? []) {
-        if (who.includes(b.partner_id)) out.push(`${partners.data?.find((p) => p.id === b.partner_id)?.name ?? ""} תפוסה ביומן האישי`);
+        if (b.all_day || !who.includes(b.partner_id)) continue;
+        out.push(b.title ? `🔒 ${b.title}` : `${partners.data?.find((p) => p.id === b.partner_id)?.name ?? ""} תפוסה`);
       }
       return [...new Set(out)];
     },
@@ -285,6 +286,8 @@ export function MeetingForm({ row, onDone, startsAt, endsAt, projectId, context,
   const [who, setWho] = useState<string>(row ? (row.partner_ids?.length === 1 ? row.partner_ids[0] : "") : partnerIds?.length === 1 ? partnerIds[0] : "");
   useEffect(() => { if (!row && !partnerIds && f.kind !== "meeting" && !who && me) setWho(me.id); }, [f.kind, me]);
   const [allDay, setAllDay] = useState(row?.all_day ?? false);
+  // Private: only I see it, and it syncs only with my own Google calendar. The other partner sees "busy".
+  const [priv, setPriv] = useState(row?.is_private ?? false);
   const [meet, setMeet] = useState(!!row?.meet_link || (!row && f.kind === "meeting"));
   const set = (k: keyof typeof f) => (v: string) => setF((s) => {
     const next = { ...s, [k]: v };
@@ -294,7 +297,7 @@ export function MeetingForm({ row, onDone, startsAt, endsAt, projectId, context,
     } else if (k === "starts_at" && !s.ends_at) next.ends_at = addHour(v);
     return next;
   });
-  const partnerList = who ? [who] : [];
+  const partnerList = priv && me ? [me.id] : who ? [who] : [];
   const conflicts = useConflicts(f.starts_at, f.ends_at, partnerList, row?.id, allDay);
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -305,7 +308,8 @@ export function MeetingForm({ row, onDone, startsAt, endsAt, projectId, context,
       values: {
         title: f.title, starts_at: start.toISOString(), ends_at: end ? end.toISOString() : null,
         location: nullIfEmpty(f.location), project_id: nullIfEmpty(f.project_id), notes: nullIfEmpty(f.notes),
-        kind: f.kind, partner_ids: partnerList, all_day: allDay,
+        kind: f.kind, partner_ids: partnerList, all_day: allDay, is_private: priv,
+        ...(priv && me ? { created_by_partner_id: me.id } : {}),
         want_meet: f.kind === "meeting" && meet && !row?.meet_link,
         ...(row ? { reminded_at: null, followed_up_at: null } : { created_by_partner_id: me?.id ?? null, task_id: taskId ?? null }),
       },
@@ -328,12 +332,16 @@ export function MeetingForm({ row, onDone, startsAt, endsAt, projectId, context,
         <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} className="size-4 accent-[var(--pink)]" />
         כל היום
       </label>
-      <Field label="מי">
+      <label className="flex items-start gap-2 text-[15px] sm:col-span-2">
+        <input type="checkbox" checked={priv} onChange={(e) => setPriv(e.target.checked)} className="mt-1 size-4 accent-[var(--pink)]" />
+        <span>🔒 פרטי <span className="text-mute">(רק אני רואה אותו, והוא נכנס רק ליומן Google האישי שלי. השותפה רואה רק "תפוסה")</span></span>
+      </label>
+      {!priv && <Field label="מי">
         <Select value={who} onChange={(e) => setWho(e.target.value)}>
           <option value="">שתינו</option>
           {partners.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </Select>
-      </Field>
+      </Field>}
       {f.kind !== "away" && <Field label="פרויקט"><ProjectPicker value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" {...context} /></Field>}
       {f.kind === "meeting" && <>
         <Field label="מקום / קישור"><Input value={f.location} onChange={(e) => set("location")(e.target.value)} /></Field>
