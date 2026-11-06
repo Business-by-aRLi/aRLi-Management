@@ -525,7 +525,9 @@ Deno.serve(async (req) => {
 
   // Supabase invoices from Gmail (daily run, and "sync now" from the Connections screen).
   if (body.gmail ?? !!req.headers.get("x-cron-secret")) {
-    const g = await gmailInvoices(!!body.full);
+    // history: look back a year for invoices without re-pulling 12 months of provider costs first,
+    // which alone can take most of the time limit.
+    const g = await gmailInvoices(!!body.full || !!body.history);
     if (g.report.length) report.supabase_invoice = g.report.join(" · ");
     errors.push(...g.errors);
   }
