@@ -4,7 +4,7 @@ import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useProjects, useWorkPlans } from "../lib/data";
 import { must, supabase } from "../lib/supabase";
-import { PROJECT_TAG, today } from "../lib/format";
+import { isArchived, PROJECT_TAG, today } from "../lib/format";
 import { Button, Input, Select } from "./ui";
 
 const NEW = "__new";
@@ -63,7 +63,7 @@ export function ProjectPicker({ value, onChange, none = "כללי לעסק (חצ
   const qc = useQueryClient();
   const projects = useProjects();
   const [type, setType] = useState("client");
-  const options = (projects.data ?? []).filter((p) => (p.status !== "closed" && (!only || only.includes(p.id))) || p.id === value);
+  const options = (projects.data ?? []).filter((p) => (!isArchived(p.status) && (!only || only.includes(p.id))) || p.id === value);
   return (
     <CreatableSelect label="פרויקט" value={value} onChange={onChange} options={options} none={none}
       addLabel="+ פרויקט חדש…" placeholder="שם הפרויקט"

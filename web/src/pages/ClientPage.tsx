@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useClients, useFinancials, useIncome, useProjects, useRemove, useTasks, useTime } from "../lib/data";
-import { date, money } from "../lib/format";
+import { date, isArchived, money } from "../lib/format";
 import { Button, Card, Eyebrow, Loading, Modal, Num, useConfirm } from "../components/ui";
 import { ClientForm, clientTotals, ContactLink } from "./Clients";
 import { NewProject, ProjectCard } from "./Projects";
@@ -22,7 +22,7 @@ export default function ClientPage() {
   const c = clients.data?.find((x) => x.id === id);
   // New items open on the client's project when there is exactly one open project; otherwise she picks from theirs.
   const mine = (projects.data ?? []).filter((p) => p.client_id === id);
-  const open = mine.filter((p) => p.status !== "closed");
+  const open = mine.filter((p) => !isArchived(p.status));
   const add = useContextAdd({
     projectId: open.length === 1 ? open[0].id : undefined, name: c?.name ?? "",
     context: { only: mine.map((p) => p.id), clientId: id },
@@ -50,7 +50,7 @@ export default function ClientPage() {
       </header>
 
       <section className="grid gap-4 sm:grid-cols-3">
-        <Stat label="פרויקטים פעילים" value={String(t.active)} />
+        <Stat label="פרויקטים בעבודה" value={String(t.active)} />
         <Stat label="שולם עד היום" value={money(t.paid)} />
         <Stat label="נשאר לגבות" value={money(t.open)} />
       </section>

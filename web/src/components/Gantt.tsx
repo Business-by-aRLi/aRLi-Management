@@ -4,7 +4,7 @@
 // When a bar is too short for its title, the title sits beside the bar instead of being cut.
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Project, Task } from "../lib/data";
-import { TASK_STATUS } from "../lib/format";
+import { isArchived, TASK_STATUS } from "../lib/format";
 import { Button, IconButton, Modal, Num } from "./ui";
 import { Icon } from "./icons";
 import { TaskForm } from "./forms";
@@ -50,7 +50,7 @@ export default function Gantt({ tasks, projects, month, onMonth }: {
       byProject.get(key)!.tasks.push({ ...t, from, to: Math.max(from, to), late: t.status !== "done" && !!t.due_on && t.due_on < todayKey });
     }
     // Active client projects show even when empty, so it is obvious where nothing is planned yet.
-    for (const p of projects.filter((p) => p.status === "active" && p.type === "client")) {
+    for (const p of projects.filter((p) => !isArchived(p.status) && p.type === "client")) {
       if (!byProject.has(p.id)) byProject.set(p.id, { key: p.id, label: p.name, projectId: p.id, tasks: [] });
     }
     return [...byProject.values()].map((r) => {

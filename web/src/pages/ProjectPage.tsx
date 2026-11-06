@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   useExpenses, useFinancials, useIncome, usePartners, useProjects, useSave, useSaveShares, usePartnerShares, useShares, useTasks, useTime,
 } from "../lib/data";
-import { date, hours, money, PROJECT_STATUS, PROJECT_TAG, TASK_STATUS } from "../lib/format";
-import { Button, Card, Field, Input, Loading, Num, Pill, Select, Tag, Textarea } from "../components/ui";
+import { date, hours, isArchived, money, PROJECT_TAG, TASK_STATUS, today } from "../lib/format";
+import { Button, Card, Field, Input, Loading, Modal, Num, Select, Tag, Textarea, useConfirm } from "../components/ui";
+import { StageStepper } from "../components/Stage";
+import { must, supabase } from "../lib/supabase";
+import { useQueryClient } from "@tanstack/react-query";
 import { ClientPicker, resolveClient, type ClientChoice } from "../components/ClientPicker";
 import type { Project } from "../lib/data";
 import { AddChips, SectionAdd, useContextAdd } from "../components/ContextAdd";
@@ -36,10 +39,10 @@ export default function ProjectPage() {
         <Link to="/projects" className="text-[15px] text-mute hover:text-bone">→ פרויקטים</Link>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Tag type={p.type} label={PROJECT_TAG[p.type] ?? p.type} />
-          {p.status !== "active" && <Pill>{PROJECT_STATUS[p.status]}</Pill>}
           {p.client_id && p.clients?.name && <Link to={`/clients/${p.client_id}`} className="text-[15px] text-pink hover:text-pink-soft">{p.clients.name}</Link>}
         </div>
         <h1 className="mt-1 text-[clamp(34px,5.2vw,80px)] font-semibold leading-[1.05] tracking-[-0.02em]">{p.name}</h1>
+        <div className="mt-6 max-w-[760px]"><StageCard project={p} /></div>
         <div className="mt-5"><AddChips kinds={["expense", "income", "document", "task", "time", "meeting"]} onAdd={add.open} /></div>
       </header>
 
@@ -52,7 +55,7 @@ export default function ProjectPage() {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <SplitCard projectId={p.id} profit={Number(f?.profit ?? 0)} expected={f?.outstanding ? Number(f.expected_profit) : null} partners={partners.data ?? []} />
-        <DetailsCard key={p.id} project={p} />
+        <DetailsCard key={p.id} project={p} moneyRows={exp.length + inc.length} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -188,14 +191,59 @@ function SplitCard({ projectId, expected, partners }: { projectId: string; profi
   );
 }
 
-function DetailsCard({ project }: { project: Project }) {
+// Moving a project between stages saves right away. Archiving stamps closed_on; bringing it back clears it.
+function StageCard({ project }: { project: Project }) {
   const save = useSave("projects");
+  const [error, setError] = useState("");
+  return (
+    <div>
+      <StageStepper status={project.status} disabled={save.isPending} onChange={async (status) => {
+        if (status === project.status) return;
+        setError("");
+        try {
+          await save.mutateAsync({ id: project.id, values: { status, closed_on: status === "archived" ? today() : null } });
+        } catch (err) { setError((err as Error).message); }
+      }} />
+      {error && <p className="mt-2 text-[14px] text-error">{error}</p>}
+    </div>
+  );
+}
+
+function DetailsCard({ project, moneyRows }: { project: Project; moneyRows: number }) {
+  const save = useSave("projects");
+  const nav = useNavigate();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const [error, setError] = useState("");
+  const [blocked, setBlocked] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const del = async () => {
+    // Money rows keep the books (and the partners' balance) true, so a project with money is archived, not deleted.
+    if (moneyRows > 0) return setBlocked(true);
+    const ok = await confirm({
+      title: `למחוק את ${project.name}?`,
+      body: "המשימות ושעות העבודה של הפרויקט יימחקו איתו. פגישות נשארות ביומן, בלי שיוך לפרויקט. אי אפשר לבטל את זה.",
+      yes: "כן, למחוק",
+    });
+    if (!ok) return;
+    setDeleting(true);
+    setError("");
+    try {
+      must(await supabase.from("tasks").delete().eq("project_id", project.id));
+      must(await supabase.from("time_entries").delete().eq("project_id", project.id));
+      must(await supabase.from("projects").delete().eq("id", project.id));
+      await qc.invalidateQueries();
+      nav("/projects");
+    } catch (err) {
+      setError((err as Error).message);
+      setDeleting(false);
+    }
+  };
   const [f, setF] = useState({
-    name: project.name, type: project.type, status: project.status,
+    name: project.name, type: project.type,
     agreed_price: project.agreed_price?.toString() ?? "", notes: project.notes ?? "",
   });
   const [client, setClient] = useState<ClientChoice>({ id: project.client_id ?? "", newName: "" });
-  const [error, setError] = useState("");
   return (
     <Card>
       <h2 className="mb-5 text-[22px] font-semibold">פרטים</h2>
@@ -205,9 +253,8 @@ function DetailsCard({ project }: { project: Project }) {
         try {
           const client_id = await resolveClient(client);
           await save.mutateAsync({ id: project.id, values: {
-            name: f.name.trim(), type: f.type, client_id, status: f.status,
+            name: f.name.trim(), type: f.type, client_id,
             agreed_price: f.agreed_price ? Number(f.agreed_price) : null, notes: f.notes || null,
-            ...(f.status === "closed" && project.status !== "closed" ? { closed_on: new Date().toISOString().slice(0, 10) } : {}),
           } });
           if (client.id === "new") setClient({ id: client_id ?? "", newName: "" });
         } catch (err) { setError((err as Error).message); }
@@ -219,16 +266,28 @@ function DetailsCard({ project }: { project: Project }) {
           </Select>
         </Field>
         <Field label="לקוח"><ClientPicker value={client} onChange={setClient} /></Field>
-        <Field label="סטטוס">
-          <Select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>
-            {Object.entries(PROJECT_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </Select>
-        </Field>
         <Field label="מחיר מוסכם (₪)"><Input type="number" inputMode="decimal" value={f.agreed_price} onChange={(e) => setF({ ...f, agreed_price: e.target.value })} /></Field>
         <div className="sm:col-span-2"><Field label="הערות"><Textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></Field></div>
         {error && <p className="sm:col-span-2 text-[14px] text-error">{error}</p>}
         <div className="sm:col-span-2"><Button variant="ghost" disabled={save.isPending}>{save.isSuccess ? "נשמר" : "שמירה"}</Button></div>
       </form>
+      <button type="button" className="mt-6 text-[14px] text-mute hover:text-error disabled:opacity-50" disabled={deleting} onClick={del}>
+        {deleting ? "מוחקת…" : "מחיקת הפרויקט"}
+      </button>
+      <Modal open={blocked} onClose={() => setBlocked(false)} title="יש בפרויקט הכנסות או הוצאות">
+        <p className="mb-6 text-mute">
+          כדי שההתחשבנות בין העסק, מירי וריקי תישאר נכונה, אי אפשר למחוק פרויקט שרשומות בו {moneyRows} תנועות כסף.
+          {" "}אפשר להעביר אותו לארכיון, או קודם להעביר את התנועות לפרויקט אחר במסך הכספים ואז למחוק.
+        </p>
+        <div className="flex flex-wrap gap-3">
+          <Button onClick={async () => {
+            setBlocked(false);
+            try { await save.mutateAsync({ id: project.id, values: { status: "archived", closed_on: today() } }); }
+            catch (err) { setError((err as Error).message); }
+          }} disabled={isArchived(project.status)}>{isArchived(project.status) ? "כבר בארכיון" : "להעביר לארכיון"}</Button>
+          <Button variant="ghost" onClick={() => setBlocked(false)}>סגירה</Button>
+        </div>
+      </Modal>
     </Card>
   );
 }

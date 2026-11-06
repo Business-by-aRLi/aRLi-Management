@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useClients, useFinancials, useProjects, useSave, type Client, type Financials, type Project } from "../lib/data";
-import { money } from "../lib/format";
+import { isArchived, money } from "../lib/format";
 import { Button, Empty, Field, Input, Loading, Modal, Num, PageTitle, SearchInput, Textarea } from "../components/ui";
 import { Icon } from "../components/icons";
 
@@ -12,9 +12,9 @@ export function clientTotals(clientId: string, projects: Project[], fin: Financi
   for (const p of mine) {
     const inc = Number(fin.find((f) => f.project_id === p.id)?.income ?? 0);
     paid += inc;
-    if (p.agreed_price != null && p.status !== "closed") open += Math.max(0, Number(p.agreed_price) - inc);
+    if (p.agreed_price != null && !isArchived(p.status)) open += Math.max(0, Number(p.agreed_price) - inc);
   }
-  return { projects: mine, active: mine.filter((p) => p.status === "active").length, paid, open };
+  return { projects: mine, active: mine.filter((p) => !isArchived(p.status)).length, paid, open };
 }
 
 export default function Clients() {
