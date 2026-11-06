@@ -72,6 +72,29 @@ type Service = { id: string; provider: string; resource_ref: string | null };
 type Costs = Map<string, Map<string, number>>;
 
 const monthOf = (iso: string) => iso.slice(0, 7) + "-01";
+
+// What was used, per line item: stored as infra_costs.breakdown so the card can show it.
+type Item = { item: string; qty: number; unit: string; cost: number };
+// month -> resource key (lower case) -> item name -> totals. Filled by the pullers that report usage.
+const usage = new Map<string, Map<string, Map<string, Item>>>();
+const addUsage = (month: string, key: string, item: string, qty: number, unit: string, cost: number) => {
+  if (!item) return;
+  const byKey = usage.get(month) ?? new Map<string, Map<string, Item>>();
+  const items = byKey.get(key.toLowerCase()) ?? new Map<string, Item>();
+  const it = items.get(item) ?? { item, qty: 0, unit, cost: 0 };
+  it.qty += Number.isFinite(qty) ? qty : 0;
+  it.cost += Number.isFinite(cost) ? cost : 0;
+  items.set(item, it);
+  byKey.set(key.toLowerCase(), items);
+  usage.set(month, byKey);
+};
+const breakdownOf = (month: string, key: string) => {
+  const items = usage.get(month)?.get(key.toLowerCase());
+  if (!items?.size) return null;
+  return [...items.values()]
+    .map((i) => ({ ...i, qty: Math.round(i.qty * 1000) / 1000, cost: Math.round(i.cost * 100) / 100 }))
+    .sort((a, b) => b.cost - a.cost || b.qty - a.qty);
+};
 const add = (c: Costs, month: string, key: string, usd: number) => {
   if (!key || !Number.isFinite(usd)) return;
   const m = c.get(month) ?? new Map<string, number>();
@@ -111,13 +134,20 @@ async function vercel(from: Date, to: Date): Promise<Costs> {
       if (!line.trim()) return;
       const c = JSON.parse(line);
       const usd = Number(c.BilledCost ?? 0);
-      if (!usd) return;
+      const qty = Number(c.ConsumedQuantity ?? c.PricingQuantity ?? 0);
+      // Usage inside the plan's included amount costs 0 but is still usage worth showing.
+      if (!usd && !qty) return;
       const tags: Record<string, string> = typeof c.Tags === "object" && c.Tags ? c.Tags : {};
       const month = monthOf(String(c.ChargePeriodStart));
       // Count the charge once under each identifier, so a service can be mapped by project id or by name.
       const keys = new Set(Object.entries(tags).filter(([k]) => /project/i.test(k)).map(([, v]) => String(v)));
       if (!keys.size) keys.add("*"); // team-level charge (plan, seats): resource_ref "*" collects it
-      for (const k of keys) add(out, month, k, usd);
+      const item = String(c.ServiceName ?? c.ChargeDescription ?? c.SkuId ?? "");
+      const unit = String(c.ConsumedUnit ?? c.PricingUnit ?? "");
+      for (const k of keys) {
+        if (usd) add(out, month, k, usd);
+        addUsage(month, k, item, qty, unit, usd);
+      }
     };
     for await (const chunk of r.body!.pipeThrough(new TextDecoderStream())) {
       buf += chunk;
@@ -179,11 +209,14 @@ async function supabaseUsage(services: Service[]) {
       const j = await getJson(
         `https://api.supabase.com/v1/projects/${encodeURIComponent(s.resource_ref)}/analytics/endpoints/usage.api-counts?interval=7day`,
         { Authorization: `Bearer ${keyOf("supabase")}` });
+      const kinds: [string, string][] = [["REST (מסד נתונים)", "total_rest_requests"], ["Auth (התחברות)", "total_auth_requests"],
+        ["Storage (קבצים)", "total_storage_requests"], ["Realtime", "total_realtime_requests"]];
       // deno-lint-ignore no-explicit-any
-      const total = (j.result ?? []).reduce((n: number, r: any) =>
-        n + (r.total_rest_requests ?? 0) + (r.total_auth_requests ?? 0) + (r.total_storage_requests ?? 0) + (r.total_realtime_requests ?? 0), 0);
+      const sum = (k: string) => (j.result ?? []).reduce((n: number, r: any) => n + Number(r[k] ?? 0), 0);
+      const items = kinds.map(([item, k]) => ({ item, qty: sum(k), unit: "בקשות" })).filter((i) => i.qty > 0);
+      const total = items.reduce((n, i) => n + i.qty, 0);
       await db.from("infra_services").update({
-        usage_note: `${total.toLocaleString("en-US")} בקשות API ב־7 הימים האחרונים`, usage_synced_at: new Date().toISOString(),
+        usage_note: `${total.toLocaleString("en-US")} בקשות API ב־7 הימים האחרונים`, usage: items, usage_synced_at: new Date().toISOString(),
       }).eq("id", s.id);
     } catch (e) { errors.push(`supabase ${s.resource_ref}: ${(e as Error).message}`); }
   }
@@ -230,6 +263,17 @@ const invoiceSchema = S("object", undefined, {
           name: S("string", "Project name as written in the invoice"),
           ref: S("string", "Project ref/id if written (20 lowercase letters), else empty"),
           amount: S("number", "Sum of all this project's line items (compute, disk, egress, add-ons...) after discounts"),
+          items: S("array", "This project's line items as written in the invoice", {
+            items: S("object", undefined, {
+              properties: {
+                description: S("string", "Line item, e.g. Compute Hours Micro, Disk Size GB-Hours, Egress"),
+                quantity: S("number", "Quantity billed, if written"),
+                unit: S("string", "Unit of the quantity: hours, GB, GB-Hrs, MAU..."),
+                amount: S("number", "Amount for this line after discounts"),
+              },
+              required: ["description", "amount"],
+            }),
+          }),
         },
         required: ["name", "amount"],
       }),
@@ -240,7 +284,8 @@ const invoiceSchema = S("object", undefined, {
 });
 
 type Parsed = { is_supabase_invoice: boolean; period_month?: string; currency?: string; total?: number;
-  projects?: { name: string; ref?: string; amount: number }[]; organization_amount?: number };
+  projects?: { name: string; ref?: string; amount: number; items?: { description: string; quantity?: number; unit?: string; amount: number }[] }[];
+  organization_amount?: number };
 
 async function parseInvoice(bytes: Uint8Array, mime: string): Promise<Parsed> {
   const res = await gemini({
@@ -253,7 +298,9 @@ async function parseInvoice(bytes: Uint8Array, mime: string): Promise<Parsed> {
   return JSON.parse(answerText(res));
 }
 
-type Line = { name: string; ref: string; amount: number };
+type Line = { name: string; ref: string; amount: number; items?: Item[] };
+// Invoices read before line items were kept (result.v < 2) are read again once.
+const INVOICE_VERSION = 2;
 
 // Files an invoice's amounts on the Supabase services they belong to (by ref, else by project name).
 async function applyInvoice(sourceKey: string, parsed: Parsed) {
@@ -266,11 +313,14 @@ async function applyInvoice(sourceKey: string, parsed: Parsed) {
   if (keyOf("supabase")) {
     try { names = new Map((await resources("supabase")).map((r) => [r.name.toLowerCase(), r.id])); } catch { /* match by ref only */ }
   }
-  const lines: Line[] = (parsed.projects ?? []).map((p) => ({ name: p.name, ref: p.ref || names.get(p.name.toLowerCase()) || "", amount: Number(p.amount) || 0 }));
+  const lines: Line[] = (parsed.projects ?? []).map((p) => ({
+    name: p.name, ref: p.ref || names.get(p.name.toLowerCase()) || "", amount: Number(p.amount) || 0,
+    items: (p.items ?? []).map((i) => ({ item: i.description, qty: Number(i.quantity ?? 0), unit: i.unit ?? "", cost: Number(i.amount) || 0 })),
+  }));
   if (parsed.organization_amount) lines.push({ name: "ארגון (תוכנית)", ref: "*", amount: Number(parsed.organization_amount) });
   const result = await fileLines(month, lines);
   await db.from("infra_invoice_imports").upsert({
-    source_key: sourceKey, provider: "supabase", month, total: parsed.total ?? null, currency: parsed.currency ?? null, result,
+    source_key: sourceKey, provider: "supabase", month, total: parsed.total ?? null, currency: parsed.currency ?? null, result: { ...result, v: INVOICE_VERSION },
   });
   return result;
 }
@@ -283,7 +333,7 @@ async function reapplyInvoices() {
     const lines = (imp.result?.lines ?? []) as Line[];
     if (!lines.length) continue;
     const result = await fileLines(imp.month, lines);
-    await db.from("infra_invoice_imports").update({ result }).eq("source_key", imp.source_key);
+    await db.from("infra_invoice_imports").update({ result: { ...result, v: imp.result?.v ?? 1 } }).eq("source_key", imp.source_key);
   }
 }
 
@@ -291,16 +341,20 @@ async function fileLines(month: string, lines: Line[]) {
   const { data: rows } = await db.from("infra_services").select("id,resource_ref,name").eq("provider", "supabase");
   const services = (rows ?? []) as { id: string; resource_ref: string | null; name: string }[];
   const byRef = new Map<string, number>();
+  const items = new Map<string, Item[]>();
   const unmatched: { name: string; amount: number }[] = [];
   for (const l of lines) {
     const key = (l.ref || l.name).toLowerCase();
     const hit = services.filter((s) => (s.resource_ref ?? "").toLowerCase() === key || (!s.resource_ref && s.name.toLowerCase() === l.name.toLowerCase()));
     if (!hit.length) { unmatched.push({ name: l.name, amount: l.amount }); continue; }
-    for (const s of hit) byRef.set(s.id, (byRef.get(s.id) ?? 0) + l.amount);
+    for (const s of hit) {
+      byRef.set(s.id, (byRef.get(s.id) ?? 0) + l.amount);
+      items.set(s.id, [...(items.get(s.id) ?? []), ...(l.items ?? [])]);
+    }
   }
   const upserts = [...byRef].map(([service_id, amount]) => ({
     service_id, month, amount: Math.round(amount * 100) / 100, source: "supabase_invoice",
-    usage_note: "מחשבונית Supabase", synced_at: new Date().toISOString(),
+    usage_note: "מחשבונית Supabase", breakdown: items.get(service_id)?.length ? items.get(service_id) : null, synced_at: new Date().toISOString(),
   }));
   if (upserts.length) {
     const w = await db.from("infra_costs").upsert(upserts, { onConflict: "service_id,month,source" });
@@ -335,8 +389,9 @@ async function gmailInvoices(full: boolean) {
       const list = await g("messages", { q: `from:supabase has:attachment newer_than:${full ? 400 : 45}d (invoice OR receipt)`, maxResults: full ? "13" : "5" });
       const ids: string[] = (list.messages ?? []).map((m: { id: string }) => m.id);
       if (!ids.length) continue;
-      const { data: seen } = await db.from("infra_invoice_imports").select("source_key").in("source_key", ids.map((i) => `gmail:${i}`));
-      const done = new Set((seen ?? []).map((r) => r.source_key));
+      const { data: seen } = await db.from("infra_invoice_imports").select("source_key,month,result").in("source_key", ids.map((i) => `gmail:${i}`));
+      // Skipped mails stay skipped; invoices read before line items were kept are read again.
+      const done = new Set((seen ?? []).filter((r) => !r.month || (r.result?.v ?? 1) >= INVOICE_VERSION).map((r) => r.source_key));
       // Each invoice takes a model call of 20-40 seconds and the function is stopped after 150, so a run
       // reads at most 3 and starts none after 80 seconds; the next run continues.
       let budget = 3;
@@ -446,7 +501,7 @@ Deno.serve(async (req) => {
         const byKey = costs.get(month) ?? new Map();
         for (const s of mine) {
           const amount = Math.round((byKey.get(s.resource_ref!.toLowerCase()) ?? 0) * 100) / 100;
-          upserts.push({ service_id: s.id, month, amount, source: provider, synced_at: new Date().toISOString() });
+          upserts.push({ service_id: s.id, month, amount, source: provider, breakdown: breakdownOf(month, s.resource_ref!), synced_at: new Date().toISOString() });
         }
       }
       const w = await db.from("infra_costs").upsert(upserts, { onConflict: "service_id,month,source" });

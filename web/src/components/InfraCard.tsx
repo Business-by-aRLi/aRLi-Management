@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
-  useConnectors, useProviderResources, useInfraCosts, useInfraMonthly, useInfraServices, useInfraSync, useInfraSyncLast, useRemove, useSave, type InfraService,
+  useConnectors, useProviderResources, useInfraCosts, useInfraMonthly, useInfraServices, useInfraSync, useInfraSyncLast, useRemove, useSave,
+  type InfraCost, type InfraService,
 } from "../lib/data";
 import { date, dateTime, today } from "../lib/format";
 import { must, supabase } from "../lib/supabase";
@@ -28,6 +29,48 @@ export const cur = (n: number | string | null | undefined, c: string) => {
 const monthStart = (d = today()) => d.slice(0, 7) + "-01";
 const monthLabel = (m: string) => new Date(`${m}T12:00:00`).toLocaleDateString("he-IL", { month: "short" });
 
+// How a service's cost for the current month is estimated:
+//   daily  - the provider reports cost as it accrues (Vercel, Claude API, OpenAI): month to date, projected to month end
+//   invoice - billed once a month after it ends (Supabase): the last invoice is the estimate
+//   fixed  - a fixed monthly price typed in
+const DAILY = new Set(["vercel", "anthropic", "openai"]);
+type Estimate = { mtd: number | null; estimate: number | null; basis: string; lastMonth: number | null; lastLabel: string };
+
+function daysIn(month: string) {
+  const d = new Date(`${month}T12:00:00`);
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+}
+const fmtQty = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: n < 10 ? 2 : 0 });
+
+function estimateOf(s: InfraService, rows: InfraCost[], thisMonth: string): Estimate {
+  const share = Number(s.share_percent) / 100;
+  const byMonth = new Map<string, number>();
+  for (const c of rows) byMonth.set(c.month, (byMonth.get(c.month) ?? 0) + Number(c.amount));
+  const past = [...byMonth.keys()].filter((m) => m < thisMonth).sort();
+  const lastM = past.at(-1);
+  const lastMonth = lastM ? byMonth.get(lastM)! * share : null;
+  const lastLabel = lastM ? monthLabel(lastM) : "";
+  const fixed = Number(s.monthly_cost) * share;
+  if (DAILY.has(s.provider) && s.resource_ref && byMonth.has(thisMonth)) {
+    const mtd = byMonth.get(thisMonth)! * share;
+    const day = Math.max(1, Number(today().slice(8, 10)));
+    const days = daysIn(thisMonth);
+    // In the first days of the month the pace says little: lean on last month.
+    const projected = (mtd / day) * days;
+    const estimate = day < 5 && lastMonth != null ? Math.max(mtd, (projected + lastMonth) / 2) : projected;
+    return { mtd, estimate: estimate + fixed, basis: `לפי קצב השימוש ב־${day} הימים הראשונים${fixed ? " ועוד המחיר הקבוע" : ""}`, lastMonth, lastLabel };
+  }
+  if (s.provider === "supabase" && lastM) {
+    return { mtd: null, estimate: lastMonth, basis: `לפי החשבונית האחרונה (${lastLabel}). Supabase מחייבת אחרי סוף החודש`, lastMonth, lastLabel };
+  }
+  if (byMonth.has(thisMonth)) {
+    const v = byMonth.get(thisMonth)! * share;
+    return { mtd: v, estimate: v, basis: "לפי מה שנרשם החודש", lastMonth, lastLabel };
+  }
+  if (fixed) return { mtd: null, estimate: fixed, basis: "מחיר קבוע לחודש", lastMonth, lastLabel };
+  return { mtd: null, estimate: lastMonth, basis: lastM ? `לפי ${lastLabel}` : "", lastMonth, lastLabel };
+}
+
 export function InfraCard({ projectId }: { projectId: string }) {
   const services = useInfraServices();
   const costs = useInfraCosts();
@@ -35,6 +78,7 @@ export function InfraCard({ projectId }: { projectId: string }) {
   const last = useInfraSyncLast();
   const sync = useInfraSync();
   const [edit, setEdit] = useState<InfraService | "new" | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
 
   const mine = (services.data ?? []).filter((s) => s.project_id === projectId);
   const rows = (monthly.data ?? []).filter((m) => m.project_id === projectId);
@@ -43,11 +87,10 @@ export function InfraCard({ projectId }: { projectId: string }) {
   const main = currencies.includes("USD") || !currencies.length ? "USD" : "ILS";
   const series = rows.filter((r) => r.currency === main).slice(-6);
   const peak = Math.max(1, ...series.map((r) => Number(r.amount)));
-  // Shown as the project's part of the cost, like the totals above.
-  const part = (s: InfraService, n: number) => (n * Number(s.share_percent)) / 100;
-  const actualOf = (s: InfraService) => part(s, (costs.data ?? []).filter((c) => c.service_id === s.id && c.month === thisMonth)
-    .reduce((n, c) => n + Number(c.amount), 0));
-  const hasActual = (s: InfraService) => (costs.data ?? []).some((c) => c.service_id === s.id && c.month === thisMonth);
+  const costsOf = (s: InfraService) => (costs.data ?? []).filter((c) => c.service_id === s.id);
+  const est = new Map(mine.map((s) => [s.id, estimateOf(s, costsOf(s), thisMonth)]));
+  const sumBy = (c: string, k: "mtd" | "estimate") =>
+    mine.filter((s) => s.active && s.currency === c).reduce((n, s) => n + (est.get(s.id)![k] ?? 0), 0);
 
   return (
     <Card>
@@ -65,14 +108,18 @@ export function InfraCard({ projectId }: { projectId: string }) {
       {!mine.length && <p className="text-mute">עוד לא נרשמו שירותים. אפשר להוסיף Vercel, Supabase, מפתח API או דומיין.</p>}
 
       {!!mine.length && (
-        <div className="mb-5 grid gap-5 sm:grid-cols-[auto_1fr] sm:items-end">
+        <div className="mb-5 grid gap-5 sm:grid-cols-[auto_auto_1fr] sm:items-end">
           <div>
             <div className="text-[clamp(26px,2.4vw,36px)] font-light text-pink">
-              {currencies.map((c, i) => (
-                <span key={c}>{i > 0 && " + "}<Num>{cur(rows.find((r) => r.month === thisMonth && r.currency === c)?.amount, c)}</Num></span>
-              ))}
+              {currencies.map((c, i) => <span key={c}>{i > 0 && " + "}<Num>~{cur(sumBy(c, "estimate"), c)}</Num></span>)}
             </div>
-            <div className="text-mute">החודש</div>
+            <div className="text-mute">צפי לחודש הזה</div>
+          </div>
+          <div>
+            <div className="text-[clamp(20px,1.8vw,26px)] font-light">
+              {currencies.map((c, i) => <span key={c}>{i > 0 && " + "}<Num>{cur(sumBy(c, "mtd"), c)}</Num></span>)}
+            </div>
+            <div className="text-mute">נצבר עד היום</div>
           </div>
           {series.length > 1 && (
             <div className="flex h-16 items-end gap-2" aria-label="עלות בחצי השנה האחרונה">
@@ -90,23 +137,25 @@ export function InfraCard({ projectId }: { projectId: string }) {
 
       {mine.map((s) => {
         const p = PROVIDERS[s.provider] ?? PROVIDERS.other;
-        const actual = hasActual(s);
+        const e = est.get(s.id)!;
+        const isOpen = open === s.id;
         return (
-          <button key={s.id} type="button" onClick={() => setEdit(s)}
-            className={`row-line flex w-full items-start justify-between gap-3 py-2.5 text-start hover:text-bone ${s.active ? "" : "opacity-50"}`}>
-            <span>
-              {s.name} <span className="text-mute">{s.name === p.label ? "" : `· ${p.label}`}{s.plan ? ` · ${s.plan}` : ""}{s.share_percent < 100 ? ` · ${Number(s.share_percent)}% מהעלות` : ""}</span>
-              {s.usage_note && <span className="block text-[13px] text-mute">{s.usage_note}</span>}
-              {s.renews_on && <span className="block text-[13px] text-mute">חידוש <Num>{date(s.renews_on)}</Num></span>}
-            </span>
-            <span className="flex shrink-0 items-center gap-2">
-              {actual && <Pill tone="pink">{p.auto && s.resource_ref ? "אוטומטי" : "בפועל"}</Pill>}
-              {actual ? <Num>{cur(actualOf(s), s.currency)}</Num>
-                : Number(s.monthly_cost) === 0
-                  ? <span className="text-mute">{p.auto && s.resource_ref ? "ממתין לסנכרון" : /free|hobby|חינ/i.test(s.plan ?? "") ? "חינמי" : "ללא מחיר"}</span>
-                : <span><Num>{cur(part(s, Number(s.monthly_cost)), s.currency)}</Num> לחודש</span>}
-            </span>
-          </button>
+          <div key={s.id} className={`row-line ${s.active ? "" : "opacity-50"}`}>
+            <button type="button" onClick={() => setOpen(isOpen ? null : s.id)} aria-expanded={isOpen}
+              className="flex w-full items-start justify-between gap-3 py-2.5 text-start hover:text-bone">
+              <span>
+                {s.name} <span className="text-mute">{s.name === p.label ? "" : `· ${p.label}`}{s.plan ? ` · ${s.plan}` : ""}{s.share_percent < 100 ? ` · ${Number(s.share_percent)}% מהעלות` : ""}</span>
+                {s.usage_note && <span className="block text-[13px] text-mute">{s.usage_note}</span>}
+              </span>
+              <span className="flex shrink-0 flex-col items-end">
+                {e.estimate != null
+                  ? <span><Num>~{cur(e.estimate, s.currency)}</Num> <span className="text-[13px] text-mute">החודש</span></span>
+                  : <span className="text-mute">{p.auto && s.resource_ref ? "ממתין לסנכרון" : /free|hobby|חינ/i.test(s.plan ?? "") ? "חינמי" : "ללא מחיר"}</span>}
+                {e.mtd != null && e.mtd !== e.estimate && <span className="text-[13px] text-mute">עד היום <Num>{cur(e.mtd, s.currency)}</Num></span>}
+              </span>
+            </button>
+            {isOpen && <ServiceDetail s={s} rows={costsOf(s)} e={e} thisMonth={thisMonth} onEdit={() => setEdit(s)} />}
+          </div>
         );
       })}
 
@@ -123,6 +172,97 @@ export function InfraCard({ projectId }: { projectId: string }) {
         {edit && <ServiceForm key={edit === "new" ? "new" : edit.id} projectId={projectId} service={edit === "new" ? null : edit} onDone={() => setEdit(null)} />}
       </Modal>
     </Card>
+  );
+}
+
+// Everything the connection knows about one service: the estimate and what it rests on, the usage
+// behind the latest month that has detail, and the monthly history.
+function ServiceDetail({ s, rows, e, thisMonth, onEdit }: { s: InfraService; rows: InfraCost[]; e: Estimate; thisMonth: string; onEdit: () => void }) {
+  const share = Number(s.share_percent) / 100;
+  const detailed = rows.filter((c) => c.breakdown?.length).sort((a, b) => b.month.localeCompare(a.month));
+  const [month, setMonth] = useState(detailed[0]?.month ?? "");
+  const shown = detailed.find((c) => c.month === month) ?? detailed[0];
+  const items = (shown?.breakdown ?? []).filter((i) => i.qty || i.cost);
+  const history = [...new Map(rows.map((c) => [c.month, 0])).keys()].sort().reverse()
+    .map((m) => ({ m, v: rows.filter((c) => c.month === m).reduce((n, c) => n + Number(c.amount), 0) * share }))
+    .filter((h) => h.v > 0 || h.m === thisMonth).slice(0, 12);
+  const synced = rows.map((c) => c.synced_at).filter(Boolean).sort().at(-1);
+
+  return (
+    <div className="mb-3 space-y-4 rounded-lg bg-[var(--hover-veil)] p-4 text-[14px]">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Stat label="צפי לחודש הזה" value={e.estimate != null ? `~${cur(e.estimate, s.currency)}` : "אין עדיין נתונים"} note={e.basis} />
+        <Stat label="נצבר עד היום" value={e.mtd != null ? cur(e.mtd, s.currency) : "יתברר בחשבונית"} />
+        <Stat label={e.lastLabel ? `חודש קודם (${e.lastLabel})` : "חודש קודם"} value={e.lastMonth != null ? cur(e.lastMonth, s.currency) : "אין"} />
+      </div>
+
+      {!!items.length && (
+        <div>
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-semibold">שימוש {shown && `ב־${monthLabel(shown.month)} ${shown.month.slice(0, 4)}`}</h3>
+            {detailed.length > 1 && (
+              <select value={shown?.month} onChange={(ev) => setMonth(ev.target.value)} aria-label="חודש"
+                className="rounded border border-[var(--line)] bg-transparent px-2 py-1 text-[13px]">
+                {detailed.map((c) => <option key={c.month} value={c.month}>{monthLabel(c.month)} {c.month.slice(0, 4)}</option>)}
+              </select>
+            )}
+          </div>
+          <table className="w-full text-start">
+            <thead className="text-[12px] text-mute"><tr><th className="py-1 text-start font-normal">פריט</th><th className="font-normal text-start">כמות</th><th className="font-normal text-end">עלות</th></tr></thead>
+            <tbody>
+              {items.map((i) => (
+                <tr key={i.item} className="border-t border-[var(--line)]">
+                  <td className="py-1.5" dir="auto">{i.item}</td>
+                  <td><Num>{i.qty ? `${fmtQty(i.qty)} ${i.unit}` : "–"}</Num></td>
+                  <td className="text-end"><Num>{i.cost ? cur(i.cost * share, s.currency) : "כלול"}</Num></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {share < 1 && <p className="mt-1 text-[12px] text-mute">העלויות מוצגות לפי {Number(s.share_percent)}% של הפרויקט.</p>}
+        </div>
+      )}
+
+      {!!s.usage?.length && (
+        <div>
+          <h3 className="mb-1 font-semibold">שימוש ב־7 הימים האחרונים</h3>
+          <div className="flex flex-wrap gap-x-5 gap-y-1">
+            {s.usage.map((u) => <span key={u.item}>{u.item}: <Num>{fmtQty(u.qty)}</Num> {u.unit}</span>)}
+          </div>
+        </div>
+      )}
+
+      {!items.length && !s.usage?.length && (
+        <p className="text-mute">{PROVIDERS[s.provider]?.auto && s.resource_ref ? "פירוט השימוש יופיע אחרי הסנכרון הבא." : "לשירות הזה אין חיבור שמביא נתוני שימוש."}</p>
+      )}
+
+      {history.length > 1 && (
+        <div>
+          <h3 className="mb-1 font-semibold">לפי חודש</h3>
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {history.map((h) => <span key={h.m}><span className="text-mute">{monthLabel(h.m)}</span> <Num>{cur(h.v, s.currency)}</Num></span>)}
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center justify-between gap-2 text-[13px] text-mute">
+        <span>
+          {s.renews_on && <>חידוש <Num>{date(s.renews_on)}</Num> · </>}
+          {synced && <>עודכן {dateTime(synced)}</>}
+        </span>
+        <Button variant="quiet" onClick={onEdit}>עריכת השירות</Button>
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
+  return (
+    <div>
+      <div className="text-[12px] text-mute">{label}</div>
+      <div className="text-[18px]"><Num>{value}</Num></div>
+      {note && <div className="text-[12px] text-mute">{note}</div>}
+    </div>
   );
 }
 
