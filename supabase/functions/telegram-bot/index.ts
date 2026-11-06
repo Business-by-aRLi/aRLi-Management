@@ -313,7 +313,7 @@ const toolDeclarations = [
       required: ["project_name"],
     }),
   },
-  { name: "get_balance", description: "ההתחשבנות בין השותפות על ההוצאות (כל הוצאה מתחלקת חצי-חצי): כמה כל אחת שילמה מכיסה, מה החצי שלה מכל ההוצאות, וסה\"כ היתרה. בנפרד: הרווח וההפסד של העסק.", parameters: S("object", undefined, { properties: {} }) },
+  { name: "get_balance", description: "ההתחשבנות בין השותפות על ההוצאות (כל הוצאה מתחלקת חצי-חצי): כמה כל אחת שילמה מכיסה, מה החצי שלה מכל ההוצאות, וסה\"כ היתרה. בנפרד: הרווח של העסק, וחלוקת הרווח (כמה כל אחת אמורה לקבל לפי החלוקה בכל פרויקט, בניכוי ההוצאות).", parameters: S("object", undefined, { properties: {} }) },
   {
     name: "list_projects", description: "רשימת פרויקטים עם הכנסות, הוצאות ורווח.",
     parameters: S("object", undefined, { properties: { status: S("string", "שלב: planning=בתכנון, setup=בהקמה, implementation=בהטמעה, active=פעיל, archived=ארכיון", { enum: ["planning", "setup", "implementation", "active", "archived"] }) } }),
@@ -667,7 +667,9 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
       return {
         business,
         partners: rows,
-        explain: "Settlement covers expenses only: paid = what she paid from her own pocket; her_half = her half of all expenses; balance = paid - her_half (> 0 = money comes back to her, < 0 = she owes). Business profit and loss is separate; do not talk about splitting profit. Never say a partner 'holds' money.",
+        profit_split: await profitSplit(),
+        explain: "Settlement covers expenses only: paid = what she paid from her own pocket; her_half = her half of all expenses; balance = paid - her_half (> 0 = money comes back to her, < 0 = she owes). " +
+          "profit_split is separate from the settlement: per partner, projects = her share of each project's profit (income minus project expenses) by that project's split rule (percent or fixed amount); general = half of the general net (income minus expenses not tied to a project, split 50/50); total = projects + general = what she should get from the profits; expected_total includes money still owed by clients. Never say a partner 'holds' money.",
       };
     }
     case "list_projects": {
@@ -979,7 +981,7 @@ function systemPrompt(me: Partner, memories: { id: string; content: string; part
 כללים:
 - הבעלות על הכסף: אין לעסק חשבון בנק. כל הוצאה שולמה מהחשבון הפרטי של אחת השותפות, וכל הכנסה התקבלה אצל אחת מהן.
 - ההתחשבנות בין השותפות היא על ההוצאות בלבד: כל הוצאה (של פרויקט או כללית) מתחלקת חצי-חצי. לכל אחת: כמה שילמה מכיסה, מה החצי שלה מכל ההוצאות, וסה"כ יתרה.
-- הרווח וההפסד של העסק (הכנסות פחות הוצאות) מוצגים בנפרד מההתחשבנות. כרגע לא מדברים על חלוקת רווח. אף פעם לא לומר שמישהי "מחזיקה" כסף.
+- הרווח של העסק וחלוקת הרווח מוצגים בנפרד מההתחשבנות. חלוקת הרווח: כל אחת מקבלת את חלקה ברווח של כל פרויקט (הכנסות פחות הוצאות הפרויקט) לפי החלוקה שהוגדרה בו, פחות חצי מההוצאות הכלליות. אף פעם לא לומר שמישהי "מחזיקה" כסף.
 - אחרי כל רישום, אשרי במשפט אחד מה נרשם (סכום, תאריך, פרויקט, מי שילמה).
 - לפני מחיקה, בקשי אישור מפורש.
 - אל תמציאי נתונים. אם חסר משהו חיוני, כמו סכום, שאלי.
@@ -1211,20 +1213,47 @@ async function showWeek(me: Partner, chatId: number) {
   await send(chatId, lines.join("\n"));
 }
 
+// What each partner should get from the profits: her share of every project's profit by that project's
+// split rule (after its expenses), plus half of the general net (general income minus general costs, 50/50).
+async function profitSplit() {
+  const [ps, shares, gi, ge] = await Promise.all([
+    partners(),
+    db.from("project_partner_shares").select("partner_id,amount,expected_amount"),
+    db.from("income").select("amount").is("project_id", null),
+    db.from("expenses").select("amount").is("project_id", null),
+  ]);
+  const sum = (rows: { amount: number }[] | null) => (rows ?? []).reduce((t, r) => t + Number(r.amount), 0);
+  const generalHalf = (sum(check(gi)) - sum(check(ge))) / Math.max(ps.length, 1);
+  const rows = check(shares) as { partner_id: string; amount: number; expected_amount: number }[];
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  return ps.map((p) => {
+    const mine = rows.filter((s) => s.partner_id === p.id);
+    const projects = mine.reduce((t, s) => t + Number(s.amount), 0);
+    const expected = mine.reduce((t, s) => t + Number(s.expected_amount), 0);
+    return { name: p.name, projects: r2(projects), general: r2(generalHalf), total: r2(projects + generalHalf), expected_total: r2(expected + generalHalf) };
+  });
+}
+
 async function showBalance(me: Partner, chatId: number) {
   const bal = (await runTool("get_balance", {}, { me, receiptPath: null, today: israelNow().date })) as {
     // deno-lint-ignore no-explicit-any
     business: any;
     partners: { name: string; paid: number; her_half: number; balance: number }[];
+    profit_split: { name: string; projects: number; general: number; total: number; expected_total: number }[];
   };
   const b = bal.business ?? {};
   const lines = ["⚖️ התחשבנות", ""];
-  lines.push(`🏢 העסק: רווח ${fmtMoney(b.profit ?? 0)} (הכנסות ${fmtMoney(b.income ?? 0)}, הוצאות פרויקטים ${fmtMoney(b.project_expenses ?? 0)}, השקעות כלליות ${fmtMoney(b.general_expenses ?? 0)})`);
+  lines.push(`🏢 העסק: רווח ${fmtMoney(b.profit ?? 0)} (הכנסות ${fmtMoney(b.income ?? 0)}, הוצאות פרויקטים ${fmtMoney(b.project_expenses ?? 0)}, הוצאות כלליות ${fmtMoney(b.general_expenses ?? 0)})`);
   const pending = Number(b.outstanding ?? 0) > 0.005;
   if (pending) lines.push(`🔮 רווח צפוי ${fmtMoney(b.expected_profit ?? 0)} · פער: עוד ${fmtMoney(b.outstanding)} מלקוחות`);
   lines.push("", "💳 הוצאות, חצי-חצי:");
   for (const p of bal.partners) {
     lines.push(`${p.name}: שילמה מכיסה ${fmtMoney(p.paid)} · החצי שלה מכל ההוצאות ${fmtMoney(p.her_half)} · סה"כ יתרה ${fmtMoney(p.balance)}`);
+  }
+  lines.push("", "📈 חלוקת הרווח (לפי החלוקה בכל פרויקט, בניכוי ההוצאות):");
+  for (const p of bal.profit_split) {
+    lines.push(`${p.name}: מהפרויקטים ${fmtMoney(p.projects)} · חצי מההוצאות הכלליות ${fmtMoney(p.general)} · אמורה לקבל ${fmtMoney(p.total)}` +
+      `${pending ? ` · צפוי ${fmtMoney(p.expected_total)}` : ""}`);
   }
   await send(chatId, lines.join("\n"));
 }
