@@ -11,6 +11,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ClientPicker, resolveClient, type ClientChoice } from "../components/ClientPicker";
 import type { Project } from "../lib/data";
 import { AddChips, SectionAdd, useContextAdd } from "../components/ContextAdd";
+import { InfraCard } from "../components/InfraCard";
 
 export default function ProjectPage() {
   const { id } = useParams();
@@ -80,6 +81,8 @@ export default function ProjectPage() {
           ))}
         </Card>
       </div>
+
+      <InfraCard projectId={p.id} />
 
       <Card>
         <div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-[22px] font-semibold">משימות פתוחות</h2><SectionAdd label="משימה" onClick={() => add.open("task")} /></div>
