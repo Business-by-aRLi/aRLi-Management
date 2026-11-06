@@ -57,6 +57,7 @@ export default function Tasks() {
                         <div className="flex items-start justify-between gap-3">
                           <button className="text-start text-[17px] font-medium leading-snug hover:text-pink-soft" onClick={() => setModal({ row: x })}>{x.title}</button>
                           <span className="flex shrink-0 gap-1">
+                            {x.is_private && <Pill tone="pink">אישית</Pill>}
                             {late && <Pill tone="pink">באיחור</Pill>}
                             {!late && x.priority === 1 && col !== "done" && <Pill tone="pink">דחוף</Pill>}
                           </span>
