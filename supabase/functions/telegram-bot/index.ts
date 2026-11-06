@@ -162,13 +162,13 @@ const toolDeclarations = [
   },
   {
     name: "add_task",
-    description: "יצירת משימה. משימה אישית (בריאות, בית, משפחה, סידורים, כסף פרטי) היא פרטית: רק מי שכתבה אותה רואה אותה.",
+    description: "יצירת משימה. ברירת המחדל היא משימה כללית שגלויה לשתי השותפות. משימה אישית רק כשהשותפה אומרת במפורש שהיא אישית.",
     parameters: S("object", undefined, {
       properties: {
         title: S("string"), description: S("string"), project_name: S("string"),
         assignee: PARTNER, due_on: S("string", "YYYY-MM-DD"),
         priority: S("integer", "1 גבוהה, 2 רגילה, 3 נמוכה"),
-        private: S("boolean", "true למשימה אישית שלא קשורה לעסק. היא תהיה של השותפה שכותבת, והשותפה השנייה לא תראה אותה."),
+        private: S("boolean", "true רק כשהשותפה אמרה במפורש \"אישי\", \"אישית\" או \"פרטי\". המשימה תהיה של השותפה שכותבת, והשותפה השנייה לא תראה אותה."),
       },
       required: ["title"],
     }),
@@ -180,6 +180,7 @@ const toolDeclarations = [
       properties: {
         task_id: S("string"), status: S("string", undefined, { enum: ["todo", "in_progress", "done"] }),
         due_on: S("string"), assignee: PARTNER,
+        private: S("boolean", "להפוך לאישית (true, של השותפה שכותבת) או לכללית (false)"),
       },
       required: ["task_id"],
     }),
@@ -470,6 +471,8 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
       if (a.status) { patch.status = a.status; patch.completed_at = a.status === "done" ? new Date().toISOString() : null; }
       if (a.due_on) { patch.due_on = a.due_on; patch.reminded_on = null; }
       if (a.assignee) patch.assignee_partner_id = (await partnerByName(a.assignee))?.id ?? null;
+      if (a.private === true) { patch.is_private = true; patch.assignee_partner_id = me.id; }
+      if (a.private === false) patch.is_private = false;
       const done = check(await db.from("tasks").update(patch).eq("id", a.task_id).or(visibleTasks(me)).select("id"));
       if (!done?.length) throw new Error("המשימה לא נמצאה");
       return { ok: true };
@@ -857,7 +860,8 @@ function systemPrompt(me: Partner, memories: { id: string; content: string; part
 - כשמגיע צילום של חשבונית או קבלה: קראי את הסכום, התאריך, שם הספק ומספר החשבונית, ורשמי אותה כהוצאה עם attach_receipt=true. אם לא ברור לאיזה פרויקט היא שייכת, שאלי. אם שום דבר לא ברור, שאלי לפני שאת רושמת.
 - כשמגיעה הודעה קולית: הביני מה נאמר ופעלי לפי זה, ובתשובה כתבי בקצרה מה הבנת.
 - חשבוניות מ-Gmail: כשמבקשים למצוא חשבוניות במייל, חפשי עם search_gmail_invoices (בנו שאילתת Gmail עם ספק, טווח תאריכים after:/before: בפורמט YYYY/MM/DD, ומילים כמו invoice, receipt, חשבונית, קבלה). קראי כל מייל רלוונטי שעוד לא נרשם עם read_gmail_invoice. אחר כך הציגי רשימה קצרה: ספק, תאריך, סכום ומטבע, ופרויקט משוער. רשמי עם add_expense רק אחרי שהשותפה אישרה, ותמיד העבירי gmail_message_id ו-receipt_path. אם הסכום לא בשקלים, שאלי מה הסכום בשקלים (למשל מהחיוב בכרטיס), ורשמי את הסכום המקורי ב-notes. אם הכלי אומר שה-Gmail לא מחובר, הפעילי connect_gmail.
-- משימות אישיות: כשמשימה לא קשורה לעסק (בריאות, בית, משפחה, סידורים, כסף פרטי), רשמי אותה עם private=true. רק ${me.name} תראה אותה. אם לא ברור אם זה אישי או עסקי, נחשי לפי ההקשר וכתבי בתשובה מה בחרת.
+- משימות אישיות: כל משימה נרשמת ככללית (גלויה לשתיכן), אלא אם ${me.name} אמרה במפורש שהיא אישית ("משימה אישית", "אישי", "פרטי"). אז רשמי עם private=true, ורק היא תראה אותה. אם משימה נשמעת אישית אבל לא נאמר כך, רשמי ככללית ושאלי בסוף התשובה אם להפוך אותה לאישית.
+- אפשר להפוך משימה קיימת לאישית או לכללית עם update_task (private).
 - זיכרון: כשמספרים לך משהו קבוע ("תזכרי ש...", העדפה, איש קשר, החלטה), שמרי עם remember_fact. כשמבקשים לשכוח או מתקנים עובדה, מחקי עם forget_fact (ואם זה תיקון, שמרי את הגרסה הנכונה). אל תשמרי כל פרט מהשיחה, רק מה שיעזור גם בעוד חודש.
 - פרויקטים: החלטה או סיכום חשוב על פרויקט נשמרים עם add_project_note. לשאלה "מה המצב ב..." או לפני הצעת מחיר, קראי get_project_notes.
 - ההיסטוריה עשויה לכלול שורות "[מידע פנימי: ...]" עם תוצאות כלים מתורות קודמות. השתמשי בהן (למשל ב-message_id וב-receipt_path), אבל לעולם אל תכתבי אותן בתשובה.
@@ -982,7 +986,7 @@ const HELP_TEXT = `מה אפשר לעשות איתי:
 🗓 פגישה: "פגישה עם עקיבא מחר ב-10"
 ⏱ שעות: "עבדתי שעתיים על Kupat MB"
 ⏰ תזכורת: "תזכירי לי ביום ראשון ב-9 לשלם על השרת"
-🔒 משימה אישית: "להחזיר את הספרים לספרייה עד יום חמישי". משימות אישיות רק את רואה
+🔒 משימה אישית: "משימה אישית: להחזיר את הספרים לספרייה עד יום חמישי". רק את רואה אותה, וכל השאר נרשם ככללי
 🧠 זיכרון: "תזכרי שעקיבא מעדיף וואטסאפ". /memory מראה מה אני זוכרת
 📧 חשבוניות: "תמצאי לי את החשבוניות מ-Vercel של החודש"
 🎙 אפשר גם הודעה קולית, אני אבין.
