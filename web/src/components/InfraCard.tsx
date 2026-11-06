@@ -2,8 +2,9 @@
 // so nothing here changes profit, the split or the partners' balance.
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import {
-  useInfraCosts, useInfraMonthly, useInfraServices, useInfraSync, useInfraSyncLast, useRemove, useSave, type InfraService,
+  useConnectors, useProviderResources, useInfraCosts, useInfraMonthly, useInfraServices, useInfraSync, useInfraSyncLast, useRemove, useSave, type InfraService,
 } from "../lib/data";
 import { date, dateTime, today } from "../lib/format";
 import { must, supabase } from "../lib/supabase";
@@ -59,7 +60,7 @@ export function InfraCard({ projectId }: { projectId: string }) {
           <SectionAdd label="שירות" onClick={() => setEdit("new")} />
         </div>
       </div>
-      <p className="mb-4 text-[15px] text-mute">אחסון, מסד נתונים ו־API. מעקב בלבד, לא נכנס להתחשבנות.</p>
+      <p className="mb-4 text-[15px] text-mute">אחסון, מסד נתונים ו־API. מעקב בלבד, לא נכנס להתחשבנות. <Link to="/connections" className="text-pink hover:text-pink-soft">חיבורים לספקים</Link></p>
 
       {!mine.length && <p className="text-mute">עוד לא נרשמו שירותים. אפשר להוסיף Vercel, Supabase, מפתח API או דומיין.</p>}
 
@@ -138,6 +139,11 @@ function ServiceForm({ projectId, service, onDone }: { projectId: string; servic
   });
   const [actual, setActual] = useState({ month: monthStart().slice(0, 7), amount: "" });
   const p = PROVIDERS[f.provider] ?? PROVIDERS.other;
+  const connectors = useConnectors();
+  const connected = p.auto && (connectors.data ?? []).some((c) => c.provider === f.provider);
+  const list = useProviderResources(f.provider, connected);
+  const [typed, setTyped] = useState(false);
+  const inList = !!list.data?.some((r) => r.id === f.resource_ref);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
 
   async function submit(e: React.FormEvent) {
@@ -174,9 +180,24 @@ function ServiceForm({ projectId, service, onDone }: { projectId: string; servic
       </Field>
       <Field label="שם"><Input value={f.name} onChange={set("name")} placeholder={p.label} /></Field>
       <div className="sm:col-span-2">
-        <Field label="מזהה אצל הספק" hint={p.ref + (p.auto ? ". עם מזהה, העלות נמשכת אוטומטית כל בוקר." : "")}>
-          <Input dir="ltr" value={f.resource_ref} onChange={set("resource_ref")} />
-        </Field>
+        {connected && list.data && !typed && (!f.resource_ref || inList) ? (
+          <Field label={`הפרויקט ב־${p.label}`} hint="העלות שלו תימשך אוטומטית כל בוקר.">
+            <Select value={f.resource_ref} onChange={(e) => e.target.value === "__typed" ? setTyped(true) : setF({ ...f, resource_ref: e.target.value })}>
+              <option value="">בחירה…</option>
+              {list.data.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+              <option value="__typed">אחר (הקלדת מזהה)</option>
+            </Select>
+          </Field>
+        ) : (
+          <Field label="מזהה אצל הספק" hint={p.ref + (p.auto ? ". עם מזהה, העלות נמשכת אוטומטית כל בוקר." : "")}>
+            <Input dir="ltr" value={f.resource_ref} onChange={set("resource_ref")} />
+          </Field>
+        )}
+        {p.auto && connectors.data && !connected && (
+          <p className="mt-1 text-[13px] text-mute">{p.label} עוד לא מחובר. <Link to="/connections" className="text-pink hover:text-pink-soft">לחיבור</Link> ואז אפשר לבחור מרשימה.</p>
+        )}
+        {connected && list.isFetching && <p className="mt-1 text-[13px] text-mute">טוענת פרויקטים מ־{p.label}…</p>}
+        {connected && list.error && <p className="mt-1 text-[13px] text-error">{(list.error as Error).message}</p>}
       </div>
       <Field label="תוכנית"><Input value={f.plan} onChange={set("plan")} placeholder="Free / Pro / לפי שימוש" /></Field>
       <Field label="מחיר קבוע לחודש">
