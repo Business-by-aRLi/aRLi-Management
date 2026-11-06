@@ -337,11 +337,12 @@ async function gmailInvoices(full: boolean) {
       if (!ids.length) continue;
       const { data: seen } = await db.from("infra_invoice_imports").select("source_key").in("source_key", ids.map((i) => `gmail:${i}`));
       const done = new Set((seen ?? []).map((r) => r.source_key));
-      // Each invoice takes a model call of 20-40 seconds, so a run reads at most 3; the next run continues.
+      // Each invoice takes a model call of 20-40 seconds and the function is stopped after 150, so a run
+      // reads at most 3 and starts none after 80 seconds; the next run continues.
       let budget = 3;
       for (const id of ids) {
         if (done.has(`gmail:${id}`)) continue;
-        if (budget-- <= 0) { report.push("ממשיך בסנכרון הבא"); break; }
+        if (budget-- <= 0 || Date.now() - started > 80_000) { report.push("ממשיך בסנכרון הבא"); break; }
         const m = await g(`messages/${id}`, { format: "full" });
         // deno-lint-ignore no-explicit-any
         const pdfs: any[] = [];
@@ -384,7 +385,9 @@ const PULLERS: Record<string, { run: (from: Date, to: Date) => Promise<Costs> }>
   vercel: { run: vercel }, anthropic: { run: anthropic }, openai: { run: openai },
 };
 
+let started = 0;
 Deno.serve(async (req) => {
+  started = Date.now();
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   if (!(await authorized(req))) return json({ error: "אין הרשאה" }, 403);
