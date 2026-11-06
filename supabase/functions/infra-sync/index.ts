@@ -293,7 +293,8 @@ async function parseInvoice(bytes: Uint8Array, mime: string): Promise<Parsed> {
       { inlineData: { mimeType: mime, data: b64(bytes) } },
       { text: "This should be a Supabase invoice. Extract the billing month and the amount per project, plus organization-level charges. For each project also list its line items (compute hours, disk, egress...) with quantity and unit where the invoice shows them." },
     ] }],
-    generationConfig: { responseMimeType: "application/json", responseSchema: invoiceSchema },
+    // Reading a table needs no reasoning; without thinking a 15-project invoice takes seconds, not minutes.
+    generationConfig: { responseMimeType: "application/json", responseSchema: invoiceSchema, thinkingConfig: { thinkingBudget: 0 } },
   });
   return JSON.parse(answerText(res));
 }
