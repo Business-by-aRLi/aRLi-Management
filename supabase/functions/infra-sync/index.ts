@@ -93,23 +93,37 @@ async function getJson(url: string, headers: Record<string, string>) {
 }
 
 // Vercel: FOCUS billing charges, JSONL, BilledCost in USD. Tags carry the Vercel project id and name.
+// The file lists every charge per day for the whole team, so it is fetched one month at a time and
+// read line by line to stay inside the function's memory.
 async function vercel(from: Date, to: Date): Promise<Costs> {
-  const qs = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() });
-  if (vercelTeam()) qs.set("teamId", vercelTeam());
-  const r = await fetch(`https://api.vercel.com/v1/billing/charges?${qs}`, { headers: { Authorization: `Bearer ${keyOf("vercel")}` } });
-  if (!r.ok) throw new Error(`vercel ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const out: Costs = new Map();
-  for (const line of (await r.text()).split("\n")) {
-    if (!line.trim()) continue;
-    const c = JSON.parse(line);
-    const usd = Number(c.BilledCost ?? 0);
-    if (!usd) continue;
-    const tags: Record<string, string> = typeof c.Tags === "object" && c.Tags ? c.Tags : {};
-    const month = monthOf(String(c.ChargePeriodStart));
-    // Count the charge once under each identifier, so a service can be mapped by project id or by name.
-    const keys = new Set(Object.entries(tags).filter(([k]) => /project/i.test(k)).map(([, v]) => String(v)));
-    if (!keys.size) keys.add("*"); // team-level charge (plan, seats): resource_ref "*" collects it
-    for (const k of keys) add(out, month, k, usd);
+  for (let start = new Date(from); start < to;) {
+    const next = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
+    const end = next < to ? next : to;
+    const qs = new URLSearchParams({ from: start.toISOString(), to: end.toISOString() });
+    if (vercelTeam()) qs.set("teamId", vercelTeam());
+    const r = await fetch(`https://api.vercel.com/v1/billing/charges?${qs}`, { headers: { Authorization: `Bearer ${keyOf("vercel")}` } });
+    if (!r.ok) throw new Error(`vercel ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    let buf = "";
+    const take = (line: string) => {
+      if (!line.trim()) return;
+      const c = JSON.parse(line);
+      const usd = Number(c.BilledCost ?? 0);
+      if (!usd) return;
+      const tags: Record<string, string> = typeof c.Tags === "object" && c.Tags ? c.Tags : {};
+      const month = monthOf(String(c.ChargePeriodStart));
+      // Count the charge once under each identifier, so a service can be mapped by project id or by name.
+      const keys = new Set(Object.entries(tags).filter(([k]) => /project/i.test(k)).map(([, v]) => String(v)));
+      if (!keys.size) keys.add("*"); // team-level charge (plan, seats): resource_ref "*" collects it
+      for (const k of keys) add(out, month, k, usd);
+    };
+    for await (const chunk of r.body!.pipeThrough(new TextDecoderStream())) {
+      buf += chunk;
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) { take(buf.slice(0, i)); buf = buf.slice(i + 1); }
+    }
+    take(buf);
+    start = next;
   }
   return out;
 }
@@ -298,7 +312,7 @@ async function gmailInvoices(full: boolean) {
       const token = await googleToken(acc.refresh_token);
       const g = (path: string, params: Record<string, string> = {}) =>
         getJson(`https://gmail.googleapis.com/gmail/v1/users/me/${path}?${new URLSearchParams(params)}`, { Authorization: `Bearer ${token}` });
-      const list = await g("messages", { q: `from:supabase has:attachment newer_than:${full ? 400 : 45}d (invoice OR receipt)`, maxResults: full ? "20" : "10" });
+      const list = await g("messages", { q: `from:supabase has:attachment newer_than:${full ? 400 : 45}d (invoice OR receipt)`, maxResults: full ? "13" : "5" });
       const ids: string[] = (list.messages ?? []).map((m: { id: string }) => m.id);
       if (!ids.length) continue;
       const { data: seen } = await db.from("infra_invoice_imports").select("source_key").in("source_key", ids.map((i) => `gmail:${i}`));
