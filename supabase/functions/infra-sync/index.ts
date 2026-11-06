@@ -251,23 +251,45 @@ async function parseInvoice(bytes: Uint8Array, mime: string): Promise<Parsed> {
   return JSON.parse(answerText(res));
 }
 
+type Line = { name: string; ref: string; amount: number };
+
 // Files an invoice's amounts on the Supabase services they belong to (by ref, else by project name).
 async function applyInvoice(sourceKey: string, parsed: Parsed) {
   if (!parsed.is_supabase_invoice || !/^\d{4}-\d{2}$/.test(parsed.period_month ?? "")) {
     throw new Error(NOT_INVOICE);
   }
   const month = `${parsed.period_month}-01`;
-  const { data: rows } = await db.from("infra_services").select("id,resource_ref,name").eq("provider", "supabase");
-  const services = (rows ?? []) as { id: string; resource_ref: string | null; name: string }[];
   // Names of the Supabase projects, to match an invoice line that shows only a name.
   let names = new Map<string, string>(); // lower name -> ref
   if (keyOf("supabase")) {
     try { names = new Map((await resources("supabase")).map((r) => [r.name.toLowerCase(), r.id])); } catch { /* match by ref only */ }
   }
+  const lines: Line[] = (parsed.projects ?? []).map((p) => ({ name: p.name, ref: p.ref || names.get(p.name.toLowerCase()) || "", amount: Number(p.amount) || 0 }));
+  if (parsed.organization_amount) lines.push({ name: "ארגון (תוכנית)", ref: "*", amount: Number(parsed.organization_amount) });
+  const result = await fileLines(month, lines);
+  await db.from("infra_invoice_imports").upsert({
+    source_key: sourceKey, provider: "supabase", month, total: parsed.total ?? null, currency: parsed.currency ?? null, result,
+  });
+  return result;
+}
+
+// Invoices already read are matched again on every run, so a Supabase service added to a project
+// later picks up its past months without reading the PDF again.
+async function reapplyInvoices() {
+  const { data } = await db.from("infra_invoice_imports").select("source_key,month,result").eq("provider", "supabase").not("month", "is", null);
+  for (const imp of data ?? []) {
+    const lines = (imp.result?.lines ?? []) as Line[];
+    if (!lines.length) continue;
+    const result = await fileLines(imp.month, lines);
+    await db.from("infra_invoice_imports").update({ result }).eq("source_key", imp.source_key);
+  }
+}
+
+async function fileLines(month: string, lines: Line[]) {
+  const { data: rows } = await db.from("infra_services").select("id,resource_ref,name").eq("provider", "supabase");
+  const services = (rows ?? []) as { id: string; resource_ref: string | null; name: string }[];
   const byRef = new Map<string, number>();
   const unmatched: { name: string; amount: number }[] = [];
-  const lines = [...(parsed.projects ?? []).map((p) => ({ name: p.name, ref: p.ref || names.get(p.name.toLowerCase()) || "", amount: Number(p.amount) || 0 }))];
-  if (parsed.organization_amount) lines.push({ name: "ארגון (תוכנית)", ref: "*", amount: Number(parsed.organization_amount) });
   for (const l of lines) {
     const key = (l.ref || l.name).toLowerCase();
     const hit = services.filter((s) => (s.resource_ref ?? "").toLowerCase() === key || (!s.resource_ref && s.name.toLowerCase() === l.name.toLowerCase()));
@@ -282,11 +304,7 @@ async function applyInvoice(sourceKey: string, parsed: Parsed) {
     const w = await db.from("infra_costs").upsert(upserts, { onConflict: "service_id,month,source" });
     if (w.error) throw new Error(w.error.message);
   }
-  const result = { month, matched: upserts.length, unmatched, lines };
-  await db.from("infra_invoice_imports").upsert({
-    source_key: sourceKey, provider: "supabase", month, total: parsed.total ?? null, currency: parsed.currency ?? null, result,
-  });
-  return result;
+  return { month, matched: upserts.length, unmatched, lines };
 }
 
 // Gmail: Supabase invoices from the last 45 days in each connected mailbox, each read once.
@@ -317,8 +335,11 @@ async function gmailInvoices(full: boolean) {
       if (!ids.length) continue;
       const { data: seen } = await db.from("infra_invoice_imports").select("source_key").in("source_key", ids.map((i) => `gmail:${i}`));
       const done = new Set((seen ?? []).map((r) => r.source_key));
+      // Each invoice takes a model call of 20-40 seconds, so a run reads at most 3; the next run continues.
+      let budget = 3;
       for (const id of ids) {
         if (done.has(`gmail:${id}`)) continue;
+        if (budget-- <= 0) { report.push("ממשיך בסנכרון הבא"); break; }
         const m = await g(`messages/${id}`, { format: "full" });
         // deno-lint-ignore no-explicit-any
         const pdfs: any[] = [];
@@ -439,8 +460,10 @@ Deno.serve(async (req) => {
     else { errors.push(...await supabaseUsage(sb)); report.supabase = `עודכן שימוש ל־${sb.length} פרויקטים`; }
   }
 
-  // Supabase invoices from Gmail (only on the daily run, not on "sync now").
-  if (req.headers.get("x-cron-secret") || body.gmail) {
+  try { await reapplyInvoices(); } catch (e) { errors.push(`invoices: ${(e as Error).message}`); }
+
+  // Supabase invoices from Gmail (daily run, and "sync now" from the Connections screen).
+  if (body.gmail ?? !!req.headers.get("x-cron-secret")) {
     const g = await gmailInvoices(!!body.full);
     if (g.report.length) report.supabase_invoice = g.report.join(" · ");
     errors.push(...g.errors);
