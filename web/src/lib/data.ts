@@ -147,6 +147,46 @@ export function useInfraSync() {
   });
 }
 
+export type Connector = {
+  provider: string; key_hint: string | null; extra: Record<string, string>; connected_at: string;
+  checked_at: string | null; check_ok: boolean | null; check_message: string | null; partners?: { name: string } | null;
+};
+export type ProviderResource = { id: string; name: string };
+export const useConnectors = () => q<Connector[]>(["infra", "connectors"], () =>
+  supabase.from("infra_connectors").select("provider,key_hint,extra,connected_at,checked_at,check_ok,check_message,partners:connected_by(name)"));
+
+// Lists the provider's projects / workspaces through the sync function (also tests the key).
+export function useProviderResources(provider: string, enabled: boolean) {
+  return useQuery<ProviderResource[]>({
+    queryKey: ["infra", "resources", provider],
+    enabled,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+    queryFn: async () => {
+      const { data, error } = await supabase.functions.invoke("infra-sync", { body: { action: "resources", provider } });
+      if (error) throw new Error(error.message);
+      if (!data?.ok) throw new Error(data?.error ?? "החיבור נכשל");
+      return data.resources as ProviderResource[];
+    },
+  });
+}
+
+export function useConnectorActions() {
+  const qc = useQueryClient();
+  const done = () => qc.invalidateQueries({ queryKey: ["infra"] });
+  return {
+    save: useMutation({
+      mutationFn: async (v: { provider: string; key: string; extra: Record<string, string> }) =>
+        must(await supabase.rpc("connector_save", { p_provider: v.provider, p_key: v.key, p_extra: v.extra })),
+      onSuccess: done,
+    }),
+    remove: useMutation({
+      mutationFn: async (provider: string) => must(await supabase.rpc("connector_remove", { p_provider: provider })),
+      onSuccess: done,
+    }),
+  };
+}
+
 export async function receiptUrl(path: string) {
   const { data } = await supabase.storage.from("receipts").createSignedUrl(path, 60 * 10);
   return data?.signedUrl;

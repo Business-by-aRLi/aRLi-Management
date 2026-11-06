@@ -1,14 +1,18 @@
 // Pulls infrastructure costs from the providers and files them under the project they belong to.
 //   POST  (x-cron-secret header)        -> daily run from pg_cron
 //   POST  (signed-in partner's JWT)     -> "sync now" button in the web app
+//   POST  { action: "resources", provider } (partner JWT) -> test the connection and list the
+//         provider's projects/workspaces, so the app can offer them in a dropdown
 // Deploy with verify_jwt = false: the function checks the caller itself (cron secret or partner JWT).
 //
+// Keys come from the app's Connections screen (infra_connectors, encrypted in Vault), with the
+// Edge Function secrets below as a fallback.
 // Mapping: every row in infra_services has a provider and a resource_ref (the id at the provider).
-//   vercel    -> Vercel project id or name          (secret VERCEL_TOKEN, optional VERCEL_TEAM_ID)
-//   anthropic -> Claude Console workspace id         (secret ANTHROPIC_ADMIN_KEY)
-//   openai    -> OpenAI project id (proj_...)        (secret OPENAI_ADMIN_KEY)
-//   supabase  -> Supabase project ref (usage only)   (secret SUPABASE_MGMT_TOKEN)
-// A provider whose secret is missing is skipped. Costs are written for this month and last month
+//   vercel    -> Vercel project id or name          (VERCEL_TOKEN, team id in extra.team_id / VERCEL_TEAM_ID)
+//   anthropic -> Claude Console workspace id         (ANTHROPIC_ADMIN_KEY)
+//   openai    -> OpenAI project id (proj_...)        (OPENAI_ADMIN_KEY)
+//   supabase  -> Supabase project ref (usage only)   (SUPABASE_MGMT_TOKEN)
+// A provider without a key is skipped. Costs are written for this month and last month
 // (last month's numbers settle after it ends), one row per service and month, source = provider.
 // Supabase has no per-project cost API, so it only refreshes the usage note on the service.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -17,6 +21,27 @@ import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const db = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const env = (k: string) => Deno.env.get(k) ?? "";
+
+const ENV_KEY: Record<string, string> = {
+  vercel: "VERCEL_TOKEN", anthropic: "ANTHROPIC_ADMIN_KEY", openai: "OPENAI_ADMIN_KEY", supabase: "SUPABASE_MGMT_TOKEN",
+};
+// Key and settings for a provider: the connection saved in the app first, then the function's env secret.
+const keys: Record<string, { key: string; extra: Record<string, string> }> = {};
+async function loadKeys() {
+  const { data: rows } = await db.from("infra_connectors").select("provider,extra");
+  for (const p of Object.keys(ENV_KEY)) {
+    const row = (rows ?? []).find((r) => r.provider === p);
+    let key = "";
+    if (row) key = ((await db.rpc("connector_key", { p_provider: p })).data as string | null) ?? "";
+    keys[p] = { key: key || env(ENV_KEY[p]), extra: (row?.extra ?? {}) as Record<string, string> };
+  }
+}
+const keyOf = (p: string) => keys[p]?.key ?? "";
+const vercelTeam = () => keys.vercel?.extra?.team_id || env("VERCEL_TEAM_ID");
+async function markCheck(provider: string, ok: boolean, message: string) {
+  await db.from("infra_connectors").update({ checked_at: new Date().toISOString(), check_ok: ok, check_message: message.slice(0, 300) })
+    .eq("provider", provider);
+}
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -38,7 +63,7 @@ const add = (c: Costs, month: string, key: string, usd: number) => {
   c.set(month, m);
 };
 
-function window() {
+function period() {
   const now = new Date();
   const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
   const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
@@ -54,8 +79,8 @@ async function getJson(url: string, headers: Record<string, string>) {
 // Vercel: FOCUS billing charges, JSONL, BilledCost in USD. Tags carry the Vercel project id and name.
 async function vercel(from: Date, to: Date): Promise<Costs> {
   const qs = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() });
-  if (env("VERCEL_TEAM_ID")) qs.set("teamId", env("VERCEL_TEAM_ID"));
-  const r = await fetch(`https://api.vercel.com/v1/billing/charges?${qs}`, { headers: { Authorization: `Bearer ${env("VERCEL_TOKEN")}` } });
+  if (vercelTeam()) qs.set("teamId", vercelTeam());
+  const r = await fetch(`https://api.vercel.com/v1/billing/charges?${qs}`, { headers: { Authorization: `Bearer ${keyOf("vercel")}` } });
   if (!r.ok) throw new Error(`vercel ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const out: Costs = new Map();
   for (const line of (await r.text()).split("\n")) {
@@ -73,6 +98,8 @@ async function vercel(from: Date, to: Date): Promise<Costs> {
   return out;
 }
 
+const ANTHROPIC_HEADERS = () => ({ "x-api-key": keyOf("anthropic"), "anthropic-version": "2023-06-01" });
+
 // Anthropic: cost report grouped by workspace. amount is a decimal string in cents.
 async function anthropic(from: Date, to: Date): Promise<Costs> {
   const out: Costs = new Map();
@@ -82,7 +109,7 @@ async function anthropic(from: Date, to: Date): Promise<Costs> {
     qs.append("group_by[]", "workspace_id");
     if (page) qs.set("page", page);
     const j = await getJson(`https://api.anthropic.com/v1/organizations/cost_report?${qs}`,
-      { "x-api-key": env("ANTHROPIC_ADMIN_KEY"), "anthropic-version": "2023-06-01" });
+      ANTHROPIC_HEADERS());
     for (const b of j.data ?? []) for (const r of b.results ?? []) {
       add(out, monthOf(b.starting_at), r.workspace_id ?? "default", Number(r.amount) / 100);
     }
@@ -102,7 +129,7 @@ async function openai(from: Date, to: Date): Promise<Costs> {
     });
     qs.append("group_by", "project_id");
     if (page) qs.set("page", page);
-    const j = await getJson(`https://api.openai.com/v1/organization/costs?${qs}`, { Authorization: `Bearer ${env("OPENAI_ADMIN_KEY")}` });
+    const j = await getJson(`https://api.openai.com/v1/organization/costs?${qs}`, { Authorization: `Bearer ${keyOf("openai")}` });
     for (const b of j.data ?? []) for (const r of b.results ?? []) {
       add(out, monthOf(new Date(b.start_time * 1000).toISOString()), r.project_id ?? "default", Number(r.amount?.value ?? 0));
     }
@@ -119,7 +146,7 @@ async function supabaseUsage(services: Service[]) {
     try {
       const j = await getJson(
         `https://api.supabase.com/v1/projects/${encodeURIComponent(s.resource_ref)}/analytics/endpoints/usage.api-counts?interval=7day`,
-        { Authorization: `Bearer ${env("SUPABASE_MGMT_TOKEN")}` });
+        { Authorization: `Bearer ${keyOf("supabase")}` });
       // deno-lint-ignore no-explicit-any
       const total = (j.result ?? []).reduce((n: number, r: any) =>
         n + (r.total_rest_requests ?? 0) + (r.total_auth_requests ?? 0) + (r.total_storage_requests ?? 0) + (r.total_realtime_requests ?? 0), 0);
@@ -129,6 +156,32 @@ async function supabaseUsage(services: Service[]) {
     } catch (e) { errors.push(`supabase ${s.resource_ref}: ${(e as Error).message}`); }
   }
   return errors;
+}
+
+// The provider's projects / workspaces, for the dropdown in the app. Also proves the key works.
+type Resource = { id: string; name: string };
+async function resources(provider: string): Promise<Resource[]> {
+  // deno-lint-ignore no-explicit-any
+  const map = (list: any[], id: string, name: string) => list.map((x) => ({ id: String(x[id]), name: String(x[name] ?? x[id]) }));
+  if (provider === "vercel") {
+    const qs = new URLSearchParams({ limit: "100" });
+    if (vercelTeam()) qs.set("teamId", vercelTeam());
+    const j = await getJson(`https://api.vercel.com/v9/projects?${qs}`, { Authorization: `Bearer ${keyOf("vercel")}` });
+    return [{ id: "*", name: "עלות התוכנית של הצוות" }, ...map(j.projects ?? [], "id", "name")];
+  }
+  if (provider === "anthropic") {
+    const j = await getJson("https://api.anthropic.com/v1/organizations/workspaces?limit=100", ANTHROPIC_HEADERS());
+    return [{ id: "default", name: "Default workspace" }, ...map(j.data ?? [], "id", "name")];
+  }
+  if (provider === "openai") {
+    const j = await getJson("https://api.openai.com/v1/organization/projects?limit=100", { Authorization: `Bearer ${keyOf("openai")}` });
+    return map(j.data ?? [], "id", "name");
+  }
+  if (provider === "supabase") {
+    const j = await getJson("https://api.supabase.com/v1/projects", { Authorization: `Bearer ${keyOf("supabase")}` });
+    return map(Array.isArray(j) ? j : [], "id", "name");
+  }
+  return [];
 }
 
 async function authorized(req: Request) {
@@ -144,28 +197,44 @@ async function authorized(req: Request) {
   return data === true;
 }
 
-const PULLERS: Record<string, { secret: string; run: (from: Date, to: Date) => Promise<Costs> }> = {
-  vercel: { secret: "VERCEL_TOKEN", run: vercel },
-  anthropic: { secret: "ANTHROPIC_ADMIN_KEY", run: anthropic },
-  openai: { secret: "OPENAI_ADMIN_KEY", run: openai },
+const PULLERS: Record<string, { run: (from: Date, to: Date) => Promise<Costs> }> = {
+  vercel: { run: vercel }, anthropic: { run: anthropic }, openai: { run: openai },
 };
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   if (!(await authorized(req))) return json({ error: "אין הרשאה" }, 403);
+  // deno-lint-ignore no-explicit-any
+  const body: any = await req.json().catch(() => ({}));
+  await loadKeys();
+
+  if (body.action === "resources") {
+    const provider = String(body.provider ?? "");
+    if (!ENV_KEY[provider]) return json({ error: "ספק לא מוכר" }, 400);
+    if (!keyOf(provider)) return json({ ok: false, error: "הספק לא מחובר" });
+    try {
+      const list = await resources(provider);
+      await markCheck(provider, true, `מחובר · ${list.length} פריטים`);
+      return json({ ok: true, resources: list });
+    } catch (e) {
+      const msg = (e as Error).message;
+      await markCheck(provider, false, msg);
+      return json({ ok: false, error: msg });
+    }
+  }
 
   const { data: rows, error } = await db.from("infra_services").select("id,provider,resource_ref").eq("active", true);
   if (error) return json({ error: error.message }, 500);
   const services = (rows ?? []) as Service[];
-  const { from, to } = window();
+  const { from, to } = period();
   const report: Record<string, string> = {};
   const errors: string[] = [];
 
   for (const [provider, p] of Object.entries(PULLERS)) {
     const mine = services.filter((s) => s.provider === provider && s.resource_ref);
     if (!mine.length) continue;
-    if (!env(p.secret)) { report[provider] = `חסר מפתח ${p.secret}`; continue; }
+    if (!keyOf(provider)) { report[provider] = `${provider} לא מחובר`; continue; }
     try {
       const costs = await p.run(from, to);
       const upserts = [];
@@ -179,12 +248,16 @@ Deno.serve(async (req) => {
       const w = await db.from("infra_costs").upsert(upserts, { onConflict: "service_id,month,source" });
       if (w.error) throw new Error(w.error.message);
       report[provider] = `עודכנו ${mine.length} שירותים`;
-    } catch (e) { errors.push(`${provider}: ${(e as Error).message}`); }
+      await markCheck(provider, true, "סנכרון הצליח");
+    } catch (e) {
+      errors.push(`${provider}: ${(e as Error).message}`);
+      await markCheck(provider, false, (e as Error).message);
+    }
   }
 
   const sb = services.filter((s) => s.provider === "supabase" && s.resource_ref);
   if (sb.length) {
-    if (!env("SUPABASE_MGMT_TOKEN")) report.supabase = "חסר מפתח SUPABASE_MGMT_TOKEN";
+    if (!keyOf("supabase")) report.supabase = "supabase לא מחובר";
     else { errors.push(...await supabaseUsage(sb)); report.supabase = `עודכן שימוש ל־${sb.length} פרויקטים`; }
   }
 
