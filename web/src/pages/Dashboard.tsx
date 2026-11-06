@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  useBusinessSummary, usePartnerSummary, useExpenses, useIdeas, useIncome, useMeetings, useProjects, useRemove, useSave, useTasks, useTime, useWorkPlans,
+  useBusinessSummary, useExpenseSettlement, useExpenses, useIdeas, useIncome, useMeetings, useProjects, useRemove, useSave, useTasks, useTime, useWorkPlans,
   type Idea, type WorkPlan,
 } from "../lib/data";
 import { money, today } from "../lib/format";
@@ -194,16 +194,14 @@ function IdeasBoard({ ideas, meId }: { ideas: Idea[]; meId?: string }) {
   );
 }
 
-// The settlement, between three parties: the business, Miri and Riki. Nobody "holds" money:
-// each partner invested, the business made a profit, and each partner received money.
+// Two separate things: the business's profit & loss, and the partner settlement.
+// The settlement is about expenses only: every expense is shared half-half (Miri, 2026-11-06).
 export function BalanceModule() {
-  const partners = usePartnerSummary();
+  const split = useExpenseSettlement();
   const business = useBusinessSummary();
-  const [settle, setSettle] = useState(false);
-  const rows = partners.data ?? [];
+  const rows = split.data ?? [];
   const biz = business.data;
-  const gets = rows.find((r) => r.balance > 0.005);   // still has money coming to her
-  const gives = rows.find((r) => r.balance < -0.005); // received more than her part
+  const total = rows.length ? rows[0].her_half * rows.length : 0;
 
   return (
     <Card>
@@ -211,12 +209,28 @@ export function BalanceModule() {
         <h2 className="text-[24px] font-semibold">התחשבנות</h2>
         <Link to="/money" className="text-[15px] text-pink hover:text-pink-soft">לכספים ←</Link>
       </div>
-      <p className="mb-5 text-[14px] text-mute">שני דברים נפרדים: כמה העסק הרוויח ואיך הרווח מתחלק, ואיך הכסף זז בפועל.</p>
+      <p className="mb-5 text-[14px] text-mute">כל הוצאה מתחלקת חצי-חצי. כאן רואים מי שילמה מכיסה יותר מהחצי שלה.</p>
 
-      {/* 1. Profit & loss: what the business earned, and each partner's part of it */}
       <section className="mb-6">
-        <h3 className="mb-2 text-[17px] font-semibold">רווח והפסד</h3>
-        {biz && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {rows.map((r) => (
+            <div key={r.partner_id} className="rounded-2xl border border-[var(--line)] px-4 py-3 text-[14px]">
+              <p className="mb-1 text-[15px] font-medium">{r.name}</p>
+              <Line label="שילמה מכיסה" value={r.paid} />
+              <Line label="החצי שלה מכל ההוצאות" value={r.her_half} />
+              <div className="mt-2 flex justify-between border-t border-[var(--line)] pt-2">
+                <span className="text-mute">סה״כ יתרה</span>
+                <Num className="font-medium">{money(Math.abs(r.balance) < 0.005 ? 0 : r.balance)}</Num>
+              </div>
+            </div>
+          ))}
+        </div>
+        <p className="mt-2 text-[13px] text-mute-2">סך כל ההוצאות <Num>{money(total)}</Num>. יתרה חיובית: שילמה יותר מהחצי שלה.</p>
+      </section>
+
+      {biz && (
+        <section>
+          <h3 className="mb-2 text-[17px] font-semibold">רווח והפסד של העסק</h3>
           <div className="rounded-2xl bg-[var(--ink-3)]/60 px-4 py-3 text-[14px]">
             <Line label="הכנסות מלקוחות" value={biz.income} />
             <Line label="הוצאות פרויקטים" value={-biz.project_expenses} />
@@ -232,45 +246,8 @@ export function BalanceModule() {
               </div>
             )}
           </div>
-        )}
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          {rows.map((r) => (
-            <div key={r.partner_id} className="rounded-2xl border border-[var(--line)] px-4 py-3 text-[14px]">
-              <p className="mb-1 text-[15px] font-medium">{r.name}</p>
-              <Line label="חלקה ברווח" value={r.profit_share} />
-              {biz && biz.outstanding > 0.005 && <Line label="חלקה ברווח הצפוי" value={r.expected_profit_share} />}
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* 2. Cash flow: who paid from her pocket, who got money in, transfers between the partners */}
-      <section>
-        <h3 className="mb-2 text-[17px] font-semibold">תזרים</h3>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {rows.map((r) => (
-            <div key={r.partner_id} className="rounded-2xl border border-[var(--line)] px-4 py-3 text-[14px]">
-              <p className="mb-1 text-[15px] font-medium">{r.name}</p>
-              <Line label="שילמה מכיסה הוצאות" value={r.invested} />
-              <Line label="קיבלה מלקוחות" value={r.received_from_clients} />
-              <Line label="העברות בין השותפות" value={r.transfers_net} />
-              <div className="mt-2 flex justify-between border-t border-[var(--line)] pt-2">
-                <span className="text-mute">סה״כ יתרה</span>
-                <Num className="font-medium">{money(Math.abs(r.balance) < 0.005 ? 0 : r.balance)}</Num>
-              </div>
-            </div>
-          ))}
-        </div>
-        <p className="mt-2 text-[13px] text-mute-2">סה״כ יתרה = חלקה ברווח + מה ששילמה מכיסה − מה שקיבלה (מלקוחות ובהעברות). חיובי: עוד מגיע לה.</p>
-      </section>
-
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-[13px] text-mute-2">
-        <span>קודם מכסים את ההוצאות הכלליות של העסק מכל רווחי הפרויקטים. רק את מה שנשאר מחלקים, לפי היחס שבו כל אחת הרוויחה מהפרויקטים.</span>
-        {gets && gives && <Button variant="ghost" className="!py-1.5 text-[14px]" onClick={() => setSettle(true)}>רישום העברה</Button>}
-      </div>
-      <Modal open={settle} onClose={() => setSettle(false)} title="רישום העברה בין השותפות">
-        <SettlementForm from={gives?.partner_id} to={gets?.partner_id} amount={gets?.balance} onDone={() => setSettle(false)} />
-      </Modal>
+        </section>
+      )}
     </Card>
   );
 }

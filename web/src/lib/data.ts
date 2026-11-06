@@ -52,6 +52,8 @@ export const useClients = () => q<Client[]>(["clients"], () => supabase.from("cl
 export const useFinancials = () => q<Financials[]>(["financials"], () => supabase.from("project_financials").select("*"));
 export type PartnerSummary = { partner_id: string; name: string; invested: number; profit_share: number; due: number; received: number; balance: number; expected_profit_share: number; received_from_clients: number; transfers_net: number };
 export type BusinessSummary = { income: number; project_expenses: number; general_expenses: number; profit: number; agreed_total: number; outstanding: number; expected_profit: number };
+export type ExpenseSettlement = { partner_id: string; name: string; paid: number; her_half: number; balance: number };
+export const useExpenseSettlement = () => q<ExpenseSettlement[]>(["balances", "expenses-split"], () => supabase.from("expense_settlement").select("*"));
 export const usePartnerSummary = () => q<PartnerSummary[]>(["balances", "partners"], () => supabase.from("partner_summary").select("*"));
 export const useBusinessSummary = () => q<BusinessSummary>(["balances", "business"], () => supabase.from("business_summary").select("*").single());
 export const useBalances = () => q<Balance[]>(["balances"], () => supabase.from("partner_balances").select("*"));
