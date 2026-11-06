@@ -313,7 +313,7 @@ const toolDeclarations = [
       required: ["project_name"],
     }),
   },
-  { name: "get_balance", description: "ההתחשבנות בין שלושה צדדים: העסק, מירי וריקי. כמה כל אחת השקיעה, מה הרווח של העסק, כמה כל אחת קיבלה, ומי מעבירה למי כדי להתאזן.", parameters: S("object", undefined, { properties: {} }) },
+  { name: "get_balance", description: "ההתחשבנות בין השותפות על ההוצאות (כל הוצאה מתחלקת חצי-חצי): כמה כל אחת שילמה מכיסה, מה החצי שלה מכל ההוצאות, וסה\"כ היתרה. בנפרד: הרווח וההפסד של העסק.", parameters: S("object", undefined, { properties: {} }) },
   {
     name: "list_projects", description: "רשימת פרויקטים עם הכנסות, הוצאות ורווח.",
     parameters: S("object", undefined, { properties: { status: S("string", "שלב: planning=בתכנון, setup=בהקמה, implementation=בהטמעה, active=פעיל, archived=ארכיון", { enum: ["planning", "setup", "implementation", "active", "archived"] }) } }),
@@ -661,16 +661,13 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
       return { ok: true, project: project.name };
     }
     case "get_balance": {
-      // Three parties: the business, Miri and Riki. Nobody "holds" money.
-      const rows = check(await db.from("partner_summary").select("name,invested,profit_share,expected_profit_share,received,balance")) as { name: string; invested: number; profit_share: number; expected_profit_share: number; received: number; balance: number }[];
-      const business = check(await db.from("business_summary").select("*").single());
-      const gets = rows.find((r) => r.balance > 0.005);
-      const gives = rows.find((r) => r.balance < -0.005);
+      // The settlement is expenses only, every expense split half-half. Profit is shown apart, with no split.
+      const rows = check(await db.from("expense_settlement").select("name,paid,her_half,balance")) as { name: string; paid: number; her_half: number; balance: number }[];
+      const business = check(await db.from("business_summary").select("income,project_expenses,general_expenses,profit,outstanding,expected_profit").single());
       return {
         business,
         partners: rows,
-        explain: "invested = expenses she paid (general costs are an investment, split 50/50); profit_share = her share of the business profit; received = money that reached her; balance > 0 = still coming to her. Never say a partner 'holds' money.",
-        summary: gets && gives ? `כדי להתאזן, ${gives.name} מעבירה ל${gets.name} ${fmtMoney(gets.balance)}` : "אתן מאוזנות",
+        explain: "Settlement covers expenses only: paid = what she paid from her own pocket; her_half = her half of all expenses; balance = paid - her_half (> 0 = money comes back to her, < 0 = she owes). Business profit and loss is separate; do not talk about splitting profit. Never say a partner 'holds' money.",
       };
     }
     case "list_projects": {
@@ -981,8 +978,8 @@ function systemPrompt(me: Partner, memories: { id: string; content: string; part
 
 כללים:
 - הבעלות על הכסף: אין לעסק חשבון בנק. כל הוצאה שולמה מהחשבון הפרטי של אחת השותפות, וכל הכנסה התקבלה אצל אחת מהן.
-- ההתחשבנות היא בין שלושה צדדים: העסק, מירי וריקי. הוצאה ששותפה שילמה היא השקעה שלה בעסק. הוצאות כלליות (בלי פרויקט) הן השקעה בעסק ומתחלקות חצי-חצי. רווח של פרויקט = הכנסות פחות הוצאות, ומתחלק לפי האחוזים של הפרויקט.
-- כשמסבירים התחשבנות: כמה כל אחת השקיעה, כמה העסק הרוויח, מה חלקה ברווח, כמה קיבלה, ומי מעבירה למי. אף פעם לא לומר שמישהי "מחזיקה" כסף.
+- ההתחשבנות בין השותפות היא על ההוצאות בלבד: כל הוצאה (של פרויקט או כללית) מתחלקת חצי-חצי. לכל אחת: כמה שילמה מכיסה, מה החצי שלה מכל ההוצאות, וסה"כ יתרה.
+- הרווח וההפסד של העסק (הכנסות פחות הוצאות) מוצגים בנפרד מההתחשבנות. כרגע לא מדברים על חלוקת רווח. אף פעם לא לומר שמישהי "מחזיקה" כסף.
 - אחרי כל רישום, אשרי במשפט אחד מה נרשם (סכום, תאריך, פרויקט, מי שילמה).
 - לפני מחיקה, בקשי אישור מפורש.
 - אל תמציאי נתונים. אם חסר משהו חיוני, כמו סכום, שאלי.
@@ -1216,20 +1213,18 @@ async function showWeek(me: Partner, chatId: number) {
 
 async function showBalance(me: Partner, chatId: number) {
   const bal = (await runTool("get_balance", {}, { me, receiptPath: null, today: israelNow().date })) as {
-    summary: string;
     // deno-lint-ignore no-explicit-any
     business: any;
-    partners: { name: string; invested: number; profit_share: number; expected_profit_share: number; balance: number }[];
+    partners: { name: string; paid: number; her_half: number; balance: number }[];
   };
   const b = bal.business ?? {};
   const lines = ["⚖️ התחשבנות", ""];
   lines.push(`🏢 העסק: רווח ${fmtMoney(b.profit ?? 0)} (הכנסות ${fmtMoney(b.income ?? 0)}, הוצאות פרויקטים ${fmtMoney(b.project_expenses ?? 0)}, השקעות כלליות ${fmtMoney(b.general_expenses ?? 0)})`);
   const pending = Number(b.outstanding ?? 0) > 0.005;
   if (pending) lines.push(`🔮 רווח צפוי ${fmtMoney(b.expected_profit ?? 0)} · פער: עוד ${fmtMoney(b.outstanding)} מלקוחות`);
-  lines.push("");
+  lines.push("", "💳 הוצאות, חצי-חצי:");
   for (const p of bal.partners) {
-    lines.push(`${p.name}: השקיעה ${fmtMoney(p.invested)} · חלקה ברווח ${fmtMoney(p.profit_share)}` +
-      `${pending ? ` · חלקה ברווח הצפוי ${fmtMoney(p.expected_profit_share ?? 0)}` : ""} · סה"כ יתרה ${fmtMoney(p.balance)}`);
+    lines.push(`${p.name}: שילמה מכיסה ${fmtMoney(p.paid)} · החצי שלה מכל ההוצאות ${fmtMoney(p.her_half)} · סה"כ יתרה ${fmtMoney(p.balance)}`);
   }
   await send(chatId, lines.join("\n"));
 }
