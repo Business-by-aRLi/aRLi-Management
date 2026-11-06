@@ -126,8 +126,13 @@ export type InfraService = {
   id: string; project_id: string; provider: string; name: string; plan: string | null; resource_ref: string | null;
   monthly_cost: number; currency: "USD" | "ILS"; share_percent: number; renews_on: string | null; active: boolean;
   notes: string | null; usage_note: string | null; usage_synced_at: string | null; created_at: string;
+  // Latest usage with no price attached (Supabase API requests, last 7 days).
+  usage: { item: string; qty: number; unit: string }[] | null;
 };
-export type InfraCost = { id: string; service_id: string; month: string; amount: number; source: string; usage_note: string | null; synced_at: string | null };
+// One line item of a month's cost, as the provider reports it.
+export type UsageItem = { item: string; qty: number; unit: string; cost: number };
+export type InfraCost = { id: string; service_id: string; month: string; amount: number; source: string; usage_note: string | null;
+  synced_at: string | null; breakdown: UsageItem[] | null };
 export type InfraMonthly = { project_id: string; month: string; currency: "USD" | "ILS"; amount: number; has_actual: boolean };
 export type InfraSyncLast = { at: string; report: Record<string, string>; errors: string[] } | null;
 export const useInfraServices = () => q<InfraService[]>(["infra", "services"], () => supabase.from("infra_services").select("*").order("created_at"));
