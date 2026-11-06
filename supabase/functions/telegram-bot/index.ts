@@ -299,13 +299,15 @@ const toolDeclarations = [
   },
   {
     name: "update_project",
-    description: "עדכון פרויקט: שלב (בתכנון, בהקמה, בהטמעה, פעיל, ארכיון), מחיר מוסכם, או חלוקת רווח (אחוז של מירי, ריקי מקבלת את השאר).",
+    description: "עדכון פרויקט: שלב (בתכנון, בהקמה, בהטמעה, פעיל, ארכיון), מחיר מוסכם, או חלוקת רווח. חלוקה באחוזים: miri_percent (ריקי מקבלת את השאר). סכום קבוע: fixed_partner + fixed_amount (למשל 'ריקי מקבלת 2000 קבוע'), השותפה השנייה מקבלת את שאר הרווח.",
     parameters: S("object", undefined, {
       properties: {
         project_name: S("string"),
         status: S("string", "שלב: planning=בתכנון, setup=בהקמה, implementation=בהטמעה, active=פעיל, archived=ארכיון", { enum: ["planning", "setup", "implementation", "active", "archived"] }),
         agreed_price: S("number"),
         miri_percent: S("number", "אחוז הרווח של מירי, 0 עד 100"),
+        fixed_partner: S("string", "השותפה שמקבלת סכום קבוע מהרווח", { enum: ["מירי", "ריקי"] }),
+        fixed_amount: S("number", "הסכום הקבוע בשקלים (עד גובה הרווח)"),
       },
       required: ["project_name"],
     }),
@@ -637,11 +639,22 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
       if (a.status) { patch.status = a.status; patch.closed_on = a.status === "archived" ? ctx.today : null; }
       if (a.agreed_price != null) patch.agreed_price = a.agreed_price;
       if (Object.keys(patch).length) check(await db.from("projects").update(patch).eq("id", project.id));
-      if (a.miri_percent != null) {
+      if (a.fixed_amount != null) {
+        if (!a.fixed_partner) throw new Error("חסר למי הסכום הקבוע");
+        if (a.fixed_amount < 0) throw new Error("הסכום הקבוע לא יכול להיות שלילי");
+        // Fixed partner gets the amount (capped at the profit by the DB view); the other gets the rest.
+        for (const p of await partners()) {
+          const fixed = p.name === a.fixed_partner;
+          check(await db.from("project_profit_shares").upsert({
+            project_id: project.id, partner_id: p.id, percent: fixed ? 0 : 100, fixed_amount: fixed ? a.fixed_amount : null,
+          }));
+        }
+      } else if (a.miri_percent != null) {
         if (a.miri_percent < 0 || a.miri_percent > 100) throw new Error("האחוז חייב להיות בין 0 ל-100");
         for (const p of await partners()) {
           const percent = p.name === "מירי" ? a.miri_percent : 100 - a.miri_percent;
-          check(await db.from("project_profit_shares").upsert({ project_id: project.id, partner_id: p.id, percent }));
+          // Clear any old fixed amount, otherwise it would keep overriding the percent split.
+          check(await db.from("project_profit_shares").upsert({ project_id: project.id, partner_id: p.id, percent, fixed_amount: null }));
         }
       }
       return { ok: true, project: project.name };
