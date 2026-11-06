@@ -1,1 +1,6 @@
-{ "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }] }
+{
+  "rewrites": [
+    { "source": "/proposal/:path*", "destination": "https://arli-proposal-luxury-tours.vercel.app/proposal/:path*" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

@@ -19,18 +19,31 @@ import Tasks from "./pages/Tasks";
 // The calendar carries the Hebrew-date and holiday tables, so it loads only when opened.
 const CalendarPage = lazy(() => import("./pages/Calendar"));
 import Rhythm from "./pages/Rhythm";
+import Leads from "./pages/Leads";
+import LeadPage from "./pages/LeadPage";
+import QuoteEditor from "./pages/QuoteEditor";
+// The client's quote page needs no sign-in and none of the app around it.
+const PublicQuote = lazy(() => import("./pages/PublicQuote"));
 import Connections from "./pages/Connections";
 
 // Order follows daily use: plan first (home, tasks, calendar), then the books.
 const LINKS: [string, string, IconName][] = [
   ["/", "בית", "home"], ["/tasks", "משימות", "tasks"], ["/calendar", "יומן", "calendar"],
-  ["/projects", "פרויקטים", "projects"], ["/clients", "לקוחות", "clients"], ["/money", "כספים", "money"], ["/time", "זמן", "time"],
+  ["/leads", "לידים", "leads"], ["/projects", "פרויקטים", "projects"], ["/clients", "לקוחות", "clients"], ["/money", "כספים", "money"], ["/time", "זמן", "time"],
 ];
 // On a phone the tab bar holds four places and the "+"; the rest live under "עוד".
-const PHONE_TABS = [LINKS[0], LINKS[1], LINKS[5]];
-const PHONE_MORE: typeof LINKS = [LINKS[2], LINKS[3], LINKS[4], LINKS[6], ["/connections", "חיבורים", "link"]];
+const PHONE_TABS = [LINKS[0], LINKS[1], LINKS[3]];
+const PHONE_MORE: typeof LINKS = [LINKS[2], LINKS[4], LINKS[5], LINKS[6], LINKS[7], ["/connections", "חיבורים", "link"]];
 
 export default function App() {
+  const { pathname } = useLocation();
+  if (pathname.startsWith("/q/")) {
+    return <Suspense fallback={<div className="qdoc min-h-dvh" />}><Routes><Route path="/q/:token" element={<PublicQuote />} /></Routes></Suspense>;
+  }
+  return <Private />;
+}
+
+function Private() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const needsPassword = () => { try { return localStorage.getItem(SET_PASSWORD_FLAG) === "1"; } catch { return false; } };
   const [setPw, setSetPw] = useState(needsPassword());
@@ -145,6 +158,10 @@ function Shell({ email }: { email: string }) {
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/calendar" element={<Suspense fallback={<Loading />}><CalendarPage /></Suspense>} />
           <Route path="/rhythm" element={<Rhythm />} />
+          <Route path="/leads" element={<Leads />} />
+          <Route path="/leads/:id" element={<LeadPage />} />
+          <Route path="/quotes/new" element={<QuoteEditor />} />
+          <Route path="/quotes/:id" element={<QuoteEditor />} />
           <Route path="/connections" element={<Connections />} />
         </Routes>
       </main>

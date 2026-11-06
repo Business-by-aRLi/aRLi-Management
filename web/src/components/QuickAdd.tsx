@@ -6,13 +6,14 @@ import { Button, Field, Input, Modal } from "./ui";
 import { ExpenseForm, IncomeForm, MeetingForm, TaskForm, TimeForm, useMe } from "./forms";
 import { DocumentUpload } from "./DocumentUpload";
 import { today } from "../lib/format";
+import { LeadForm } from "../pages/Leads";
 
-type Kind = "task" | "expense" | "income" | "time" | "meeting" | "idea" | "document";
+type Kind = "task" | "expense" | "income" | "time" | "meeting" | "idea" | "lead" | "document";
 const KINDS: [Kind, string, IconName][] = [
   ["task", "משימה", "tasks"], ["expense", "הוצאה", "expense"], ["income", "הכנסה", "income"],
-  ["time", "שעות", "time"], ["meeting", "פגישה", "meeting"], ["idea", "רעיון", "idea"],
+  ["time", "שעות", "time"], ["meeting", "פגישה", "meeting"], ["idea", "רעיון", "idea"], ["lead", "ליד", "leads"],
 ];
-const TITLES: Record<Kind, string> = { task: "משימה חדשה", expense: "הוצאה חדשה", income: "הכנסה חדשה", time: "דיווח שעות", meeting: "פגישה חדשה", idea: "רעיון חדש", document: "העלאת מסמך" };
+const TITLES: Record<Kind, string> = { task: "משימה חדשה", expense: "הוצאה חדשה", income: "הכנסה חדשה", time: "דיווח שעות", meeting: "פגישה חדשה", idea: "רעיון חדש", lead: "ליד חדש", document: "העלאת מסמך" };
 
 export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [kind, setKind] = useState<Kind | null>(null);
@@ -43,6 +44,7 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
       {kind === "time" && <TimeForm onDone={close} />}
       {kind === "meeting" && <MeetingForm onDone={close} />}
       {kind === "idea" && <IdeaForm onDone={close} />}
+      {kind === "lead" && <LeadForm onDone={close} />}
       {kind === "document" && <DocumentUpload onDone={close} />}
     </Modal>
   );
