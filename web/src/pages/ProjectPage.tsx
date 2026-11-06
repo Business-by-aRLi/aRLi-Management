@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
-  useExpenses, useFinancials, useIncome, usePartners, useProjects, useSave, useSaveShares, useShares, useTasks, useTime,
+  useExpenses, useFinancials, useIncome, usePartners, useProjects, useSave, useSaveShares, usePartnerShares, useShares, useTasks, useTime,
 } from "../lib/data";
 import { date, hours, money, PROJECT_STATUS, PROJECT_TAG, TASK_STATUS } from "../lib/format";
 import { Button, Card, Field, Input, Loading, Num, Pill, Select, Tag, Textarea } from "../components/ui";
@@ -93,45 +93,95 @@ export default function ProjectPage() {
   );
 }
 
-// Profit split per project. One slider: Miri's share, Riki gets the rest.
-function SplitCard({ projectId, profit, expected, partners }: { projectId: string; profit: number; expected: number | null; partners: { id: string; name: string }[] }) {
+// Profit split per project: by percent (one slider, Riki gets the rest), or a fixed amount for one partner
+// with the rest of the profit going to the other. The amounts shown come from the DB view.
+function SplitCard({ projectId, expected, partners }: { projectId: string; profit: number; expected: number | null; partners: { id: string; name: string }[] }) {
   const shares = useShares();
+  const amounts = usePartnerShares();
   const save = useSaveShares();
   const mine = shares.data?.filter((s) => s.project_id === projectId) ?? [];
   const [first, second] = partners;
-  const current = Number(mine.find((s) => s.partner_id === first?.id)?.percent ?? 50);
-  const [pct, setPct] = useState(current);
-  useEffect(() => setPct(current), [current]);
+  const fixedRow = mine.find((s) => s.fixed_amount != null);
+  const curMode: "pct" | "fixed" = fixedRow ? "fixed" : "pct";
+  const curPct = Number(mine.find((s) => s.partner_id === first?.id)?.percent ?? 50);
+  const curWho = fixedRow?.partner_id ?? second?.id ?? "";
+  const curAmount = fixedRow?.fixed_amount != null ? String(Number(fixedRow.fixed_amount)) : "";
+  const [mode, setMode] = useState(curMode);
+  const [pct, setPct] = useState(curPct);
+  const [who, setWho] = useState(curWho);
+  const [amount, setAmount] = useState(curAmount);
+  const reset = () => { setMode(curMode); setPct(curPct); setWho(curWho); setAmount(curAmount); };
+  useEffect(reset, [curMode, curPct, curWho, curAmount]);
   if (!first || !second) return null;
-  const dirty = pct !== current;
+  const dirty = mode !== curMode || (mode === "pct" ? pct !== curPct : who !== curWho || amount !== curAmount);
+  const other = who === first.id ? second : first;
+  const amt = (id: string) => amounts.data?.find((s) => s.project_id === projectId && s.partner_id === id);
+
+  function submit() {
+    if (mode === "pct") {
+      save.mutate([
+        { project_id: projectId, partner_id: first.id, percent: pct, fixed_amount: null },
+        { project_id: projectId, partner_id: second.id, percent: 100 - pct, fixed_amount: null },
+      ]);
+    } else {
+      const n = Number(amount);
+      if (!(n >= 0) || amount === "") return;
+      save.mutate([
+        { project_id: projectId, partner_id: who, percent: 0, fixed_amount: n },
+        { project_id: projectId, partner_id: other.id, percent: 100, fixed_amount: null },
+      ]);
+    }
+  }
+
+  const tab = (m: "pct" | "fixed", label: string) => (
+    <button type="button" onClick={() => setMode(m)}
+      className={`rounded-full px-3.5 py-1.5 text-[14px] transition-colors ${mode === m ? "bg-pink text-ink" : "text-mute hover:text-bone"}`}>{label}</button>
+  );
 
   return (
     <Card>
       <h2 className="text-[22px] font-semibold">חלוקת הרווח</h2>
-      <p className="mb-5 text-[15px] text-mute">אחרי קיזוז ההוצאות של הפרויקט.</p>
-      <div className="mb-3 flex justify-between text-[18px]">
-        <span>{first.name} <span className="text-pink"><Num>{pct}%</Num></span></span>
-        <span>{second.name} <span className="text-pink"><Num>{100 - pct}%</Num></span></span>
+      <p className="mb-4 text-[15px] text-mute">אחרי קיזוז ההוצאות של הפרויקט.</p>
+      <div className="mb-5 inline-flex gap-1 rounded-full border border-[var(--line)] p-1">
+        {tab("pct", "לפי אחוזים")}{tab("fixed", "סכום קבוע")}
       </div>
-      <input type="range" min={0} max={100} step={5} value={pct} onChange={(e) => setPct(Number(e.target.value))} className="w-full accent-[var(--pink)]" />
-      <div className="mt-2 flex justify-between text-[14px] text-mute">
-        <Num>{money((profit * pct) / 100)}</Num><Num>{money((profit * (100 - pct)) / 100)}</Num>
-      </div>
-      {expected != null && (
-        <div className="mt-3 border-t border-[var(--line)] pt-3">
-          <p className="mb-1 text-[13px] text-mute">לפי הצפי, כשכל התמורה תתקבל (רווח צפוי <Num>{money(expected)}</Num>):</p>
-          <div className="flex justify-between text-[15px]">
-            <Num>{money((expected * pct) / 100)}</Num><Num>{money((expected * (100 - pct)) / 100)}</Num>
+
+      {mode === "pct" ? (
+        <>
+          <div className="mb-3 flex justify-between text-[18px]">
+            <span>{first.name} <span className="text-pink"><Num>{pct}%</Num></span></span>
+            <span>{second.name} <span className="text-pink"><Num>{100 - pct}%</Num></span></span>
           </div>
+          <input type="range" min={0} max={100} step={5} value={pct} onChange={(e) => setPct(Number(e.target.value))} className="w-full accent-[var(--pink)]" />
+        </>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="מי מקבלת סכום קבוע">
+            <Select value={who} onChange={(e) => setWho(e.target.value)}>
+              <option value={first.id}>{first.name}</option><option value={second.id}>{second.name}</option>
+            </Select>
+          </Field>
+          <Field label="סכום (₪)">
+            <Input type="number" inputMode="decimal" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="למשל 2000" />
+          </Field>
+          <p className="text-[13px] text-mute sm:col-span-2">{other.name} מקבלת את כל השאר. הסכום הקבוע משולם מתוך הרווח, ולא יותר ממה שיש.</p>
+        </div>
+      )}
+
+      {!dirty && (
+        <div className="mt-4 space-y-2 border-t border-[var(--line)] pt-3 text-[15px]">
+          <div className="flex justify-between"><span className="text-mute">כרגע</span>
+            <span className="flex gap-6"><span>{first.name} <Num>{money(amt(first.id)?.amount)}</Num></span><span>{second.name} <Num>{money(amt(second.id)?.amount)}</Num></span></span></div>
+          {expected != null && (
+            <div className="flex justify-between"><span className="text-mute">לפי הצפי (<Num>{money(expected)}</Num>)</span>
+              <span className="flex gap-6"><span>{first.name} <Num>{money(amt(first.id)?.expected_amount)}</Num></span><span>{second.name} <Num>{money(amt(second.id)?.expected_amount)}</Num></span></span></div>
+          )}
         </div>
       )}
       {dirty && (
         <div className="mt-5 flex gap-3">
-          <Button arrow className="group" disabled={save.isPending} onClick={() => save.mutate([
-            { project_id: projectId, partner_id: first.id, percent: pct },
-            { project_id: projectId, partner_id: second.id, percent: 100 - pct },
-          ])}>שמירת החלוקה</Button>
-          <Button variant="quiet" onClick={() => setPct(current)}>ביטול</Button>
+          <Button arrow className="group" disabled={save.isPending || (mode === "fixed" && amount === "")} onClick={submit}>שמירת החלוקה</Button>
+          <Button variant="quiet" onClick={reset}>ביטול</Button>
         </div>
       )}
     </Card>

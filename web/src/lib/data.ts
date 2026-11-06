@@ -38,7 +38,9 @@ export type GoogleConnection = { partner_id: string; email: string; connected_at
 export type SyncStatus = { calendar_id: string | null; last_pull: string | null; last_error: string | null; pending: number };
 export type Slot = { starts_at: string; ends_at: string };
 export type TimeEntry = { id: string; project_id: string | null; work_date: string; minutes: number; kind: string; description: string | null; projects?: { name: string } | null; partners?: { name: string } | null };
-export type Share = { project_id: string; partner_id: string; percent: number };
+export type Share = { project_id: string; partner_id: string; percent: number; fixed_amount?: number | null };
+// What each partner gets from a project, as calculated in the DB (percent or fixed amount).
+export type PartnerShare = Share & { amount: number; expected_amount: number };
 export type RecurringCost = { id: string; name: string; amount: number; frequency: string; active: boolean; paid_by_partner_id: string | null; project_id: string | null };
 
 const q = <T,>(key: unknown[], fn: () => PromiseLike<{ data: unknown; error: { message: string } | null }>) =>
@@ -53,6 +55,7 @@ export type BusinessSummary = { income: number; project_expenses: number; genera
 export const usePartnerSummary = () => q<PartnerSummary[]>(["balances", "partners"], () => supabase.from("partner_summary").select("*"));
 export const useBusinessSummary = () => q<BusinessSummary>(["balances", "business"], () => supabase.from("business_summary").select("*").single());
 export const useBalances = () => q<Balance[]>(["balances"], () => supabase.from("partner_balances").select("*"));
+export const usePartnerShares = () => q<PartnerShare[]>(["shares", "amounts"], () => supabase.from("project_partner_shares").select("*"));
 export const useShares = () => q<Share[]>(["shares"], () => supabase.from("project_profit_shares").select("*"));
 export const useExpenses = () => q<Expense[]>(["expenses"], () =>
   supabase.from("expenses").select("*,projects(name),partners(name)").order("spent_on", { ascending: false }).limit(500));
