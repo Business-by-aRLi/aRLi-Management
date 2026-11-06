@@ -37,7 +37,7 @@ export default function Connections() {
   return (
     <div className="space-y-8">
       <PageTitle eyebrow="הגדרות" title="חיבורים"
-        action={byProvider.size > 0 && <Button variant="ghost" disabled={sync.isPending} onClick={() => sync.mutate({ gmail: true, full: true })}>{sync.isPending ? "מסנכרנת…" : "סנכרון כל ההיסטוריה"}</Button>} />
+        action={byProvider.size > 0 && <Button variant="ghost" disabled={sync.isPending} onClick={() => sync.mutate({ gmail: true, history: true })}>{sync.isPending ? "מסנכרנת…" : "סנכרון כל ההיסטוריה"}</Button>} />
       <p className="max-w-[640px] text-mute">
         מחברים ספק פעם אחת, ומעכשיו העלויות שלו נמשכות כל בוקר לכרטיס "תשתיות" בכל פרויקט. המפתח נשמר מוצפן ולא מוצג שוב.
       </p>
