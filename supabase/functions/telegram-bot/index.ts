@@ -1252,8 +1252,9 @@ async function showBalance(me: Partner, chatId: number) {
   }
   lines.push("", "📈 חלוקת הרווח (לפי החלוקה בכל פרויקט, בניכוי ההוצאות):");
   for (const p of bal.profit_split) {
-    lines.push(`${p.name}: מהפרויקטים ${fmtMoney(p.projects)} · חצי מההוצאות הכלליות ${fmtMoney(p.general)} · אמורה לקבל ${fmtMoney(p.total)}` +
-      `${pending ? ` · צפוי ${fmtMoney(p.expected_total)}` : ""}`);
+    const general = p.general <= 0 ? `פחות חצי מההוצאות הכלליות ${fmtMoney(-p.general)}` : `ועוד חצי מההכנסות הכלליות ${fmtMoney(p.general)}`;
+    lines.push(`${p.name}: מהפרויקטים ${fmtMoney(p.projects)} · ${general} · אמורה לקבל מהרווח ${fmtMoney(p.total)}` +
+      `${pending ? ` · לפי הצפי ${fmtMoney(p.expected_total)}` : ""}`);
   }
   await send(chatId, lines.join("\n"));
 }
