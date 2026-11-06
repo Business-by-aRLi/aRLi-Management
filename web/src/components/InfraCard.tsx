@@ -55,7 +55,7 @@ export function InfraCard({ projectId }: { projectId: string }) {
         <h2 className="text-[22px] font-semibold">תשתיות</h2>
         <div className="flex items-center gap-2">
           {mine.some((s) => PROVIDERS[s.provider]?.auto) && (
-            <Button variant="quiet" disabled={sync.isPending} onClick={() => sync.mutate()}>{sync.isPending ? "מסנכרנת…" : "סנכרון עכשיו"}</Button>
+            <Button variant="quiet" disabled={sync.isPending} onClick={() => sync.mutate({ full: true })}>{sync.isPending ? "מסנכרנת…" : "סנכרון עכשיו"}</Button>
           )}
           <SectionAdd label="שירות" onClick={() => setEdit("new")} />
         </div>
@@ -102,7 +102,8 @@ export function InfraCard({ projectId }: { projectId: string }) {
             <span className="flex shrink-0 items-center gap-2">
               {actual && <Pill tone="pink">{p.auto && s.resource_ref ? "אוטומטי" : "בפועל"}</Pill>}
               {actual ? <Num>{cur(actualOf(s), s.currency)}</Num>
-                : Number(s.monthly_cost) === 0 ? <span className="text-mute">חינמי</span>
+                : Number(s.monthly_cost) === 0
+                  ? <span className="text-mute">{p.auto && s.resource_ref ? "ממתין לסנכרון" : /free|hobby|חינ/i.test(s.plan ?? "") ? "חינמי" : "ללא מחיר"}</span>
                 : <span><Num>{cur(part(s, Number(s.monthly_cost)), s.currency)}</Num> לחודש</span>}
             </span>
           </button>

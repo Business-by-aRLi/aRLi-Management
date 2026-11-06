@@ -139,8 +139,9 @@ export function useInfraSync() {
   const qc = useQueryClient();
   return useMutation({
     // gmail: also look for new Supabase invoices in the connected mailboxes (the daily run always does).
-    mutationFn: async (opts?: { gmail?: boolean }) => {
-      const { data, error } = await supabase.functions.invoke("infra-sync", { body: { gmail: !!opts?.gmail } });
+    // full: go back 12 months (history) instead of the last two.
+    mutationFn: async (opts?: { gmail?: boolean; full?: boolean }) => {
+      const { data, error } = await supabase.functions.invoke("infra-sync", { body: { gmail: !!opts?.gmail, full: !!opts?.full } });
       if (error) throw new Error(error.message);
       return data as { ok: boolean; report: Record<string, string>; errors: string[] };
     },

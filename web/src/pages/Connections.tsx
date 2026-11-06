@@ -10,7 +10,7 @@ import { Button, Card, Field, Input, Loading, Modal, PageTitle, Pill, useConfirm
 type Info = { name: string; gives: string; keyLabel: string; where: string; url: string; team?: boolean };
 export const CONNECTORS: Record<string, Info> = {
   vercel: {
-    name: "Vercel", gives: "עלות אחסון לכל פרויקט, כל בוקר. בתוכנית Hobby העלות 0.",
+    name: "Vercel", gives: "עלות אחסון לכל פרויקט, כל בוקר, כולל 12 החודשים האחרונים. מנוי Pro עצמו משויך דרך \"עלות התוכנית של הצוות\".",
     keyLabel: "Access Token", where: "Account Settings › Tokens › Create", url: "https://vercel.com/account/settings/tokens", team: true,
   },
   anthropic: {
@@ -37,7 +37,7 @@ export default function Connections() {
   return (
     <div className="space-y-8">
       <PageTitle eyebrow="הגדרות" title="חיבורים"
-        action={byProvider.size > 0 && <Button variant="ghost" disabled={sync.isPending} onClick={() => sync.mutate({ gmail: true })}>{sync.isPending ? "מסנכרנת…" : "סנכרון עלויות עכשיו"}</Button>} />
+        action={byProvider.size > 0 && <Button variant="ghost" disabled={sync.isPending} onClick={() => sync.mutate({ gmail: true, full: true })}>{sync.isPending ? "מסנכרנת…" : "סנכרון כל ההיסטוריה"}</Button>} />
       <p className="max-w-[640px] text-mute">
         מחברים ספק פעם אחת, ומעכשיו העלויות שלו נמשכות כל בוקר לכרטיס "תשתיות" בכל פרויקט. המפתח נשמר מוצפן ולא מוצג שוב.
       </p>

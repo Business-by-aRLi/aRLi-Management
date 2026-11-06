@@ -15,8 +15,9 @@
 //   anthropic -> Claude Console workspace id         (ANTHROPIC_ADMIN_KEY)
 //   openai    -> OpenAI project id (proj_...)        (OPENAI_ADMIN_KEY)
 //   supabase  -> Supabase project ref (usage only)   (SUPABASE_MGMT_TOKEN)
-// A provider without a key is skipped. Costs are written for this month and last month
-// (last month's numbers settle after it ends), one row per service and month, source = provider.
+// A provider without a key is skipped. The daily run rewrites this month and last month (last month's
+// numbers settle after it ends). A full run ({ full: true }, "sync now", or a service with no costs yet)
+// goes back 12 months, Vercel's limit. One row per service and month, source = provider.
 // Supabase has no per-project cost API, so it only refreshes the usage note on the service.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
@@ -41,7 +42,18 @@ async function loadKeys() {
   }
 }
 const keyOf = (p: string) => keys[p]?.key ?? "";
-const vercelTeam = () => keys.vercel?.extra?.team_id || env("VERCEL_TEAM_ID");
+let detectedTeam = "";
+const vercelTeam = () => keys.vercel?.extra?.team_id || env("VERCEL_TEAM_ID") || detectedTeam;
+// Billing is per team. Without a team id set, use the account's team when it has exactly one.
+async function detectVercelTeam() {
+  if (vercelTeam() || !keyOf("vercel")) return;
+  try {
+    const r = await fetch("https://api.vercel.com/v2/teams?limit=20", { headers: { Authorization: `Bearer ${keyOf("vercel")}` } });
+    if (!r.ok) return;
+    const teams = (await r.json()).teams ?? [];
+    if (teams.length === 1) detectedTeam = teams[0].id;
+  } catch { /* personal account */ }
+}
 async function markCheck(provider: string, ok: boolean, message: string) {
   await db.from("infra_connectors").update({ checked_at: new Date().toISOString(), check_ok: ok, check_message: message.slice(0, 300) })
     .eq("provider", provider);
@@ -67,9 +79,9 @@ const add = (c: Costs, month: string, key: string, usd: number) => {
   c.set(month, m);
 };
 
-function period() {
+function period(monthsBack: number) {
   const now = new Date();
-  const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - monthsBack, 1));
   const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
   return { from, to };
 }
@@ -278,7 +290,7 @@ async function googleToken(refresh: string) {
   if (!tok.access_token) throw new Error(`Google: ${tok.error ?? "no token"}`);
   return tok.access_token as string;
 }
-async function gmailInvoices() {
+async function gmailInvoices(full: boolean) {
   const report: string[] = [], errors: string[] = [];
   const { data: accounts } = await db.from("gmail_accounts").select("partner_id,email,refresh_token");
   for (const acc of accounts ?? []) {
@@ -286,7 +298,7 @@ async function gmailInvoices() {
       const token = await googleToken(acc.refresh_token);
       const g = (path: string, params: Record<string, string> = {}) =>
         getJson(`https://gmail.googleapis.com/gmail/v1/users/me/${path}?${new URLSearchParams(params)}`, { Authorization: `Bearer ${token}` });
-      const list = await g("messages", { q: "from:supabase has:attachment newer_than:45d (invoice OR receipt)", maxResults: "10" });
+      const list = await g("messages", { q: `from:supabase has:attachment newer_than:${full ? 400 : 45}d (invoice OR receipt)`, maxResults: full ? "20" : "10" });
       const ids: string[] = (list.messages ?? []).map((m: { id: string }) => m.id);
       if (!ids.length) continue;
       const { data: seen } = await db.from("infra_invoice_imports").select("source_key").in("source_key", ids.map((i) => `gmail:${i}`));
@@ -342,6 +354,7 @@ Deno.serve(async (req) => {
   // deno-lint-ignore no-explicit-any
   const body: any = await req.json().catch(() => ({}));
   await loadKeys();
+  await detectVercelTeam();
 
   if (body.action === "supabase_invoice") {
     const path = String(body.path ?? "");
@@ -372,7 +385,10 @@ Deno.serve(async (req) => {
   const { data: rows, error } = await db.from("infra_services").select("id,provider,resource_ref").eq("active", true);
   if (error) return json({ error: error.message }, 500);
   const services = (rows ?? []) as Service[];
-  const { from, to } = period();
+  // History: a full run on request, or when a mapped service has no cost rows yet (just added).
+  const { data: have } = await db.from("infra_costs").select("service_id").neq("source", "manual");
+  const withCosts = new Set((have ?? []).map((r) => r.service_id));
+  const needsHistory = (list: Service[]) => !!body.full || list.some((s) => !withCosts.has(s.id));
   const report: Record<string, string> = {};
   const errors: string[] = [];
 
@@ -381,9 +397,12 @@ Deno.serve(async (req) => {
     if (!mine.length) continue;
     if (!keyOf(provider)) { report[provider] = `${provider} לא מחובר`; continue; }
     try {
+      const { from, to } = period(needsHistory(mine) ? 11 : 1);
       const costs = await p.run(from, to);
       const upserts = [];
-      for (const month of [monthOf(from.toISOString()), monthOf(new Date().toISOString())]) {
+      const months: string[] = [];
+      for (let d = new Date(from); d < to; d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) months.push(monthOf(d.toISOString()));
+      for (const month of months) {
         const byKey = costs.get(month) ?? new Map();
         for (const s of mine) {
           const amount = Math.round((byKey.get(s.resource_ref!.toLowerCase()) ?? 0) * 100) / 100;
@@ -408,7 +427,7 @@ Deno.serve(async (req) => {
 
   // Supabase invoices from Gmail (only on the daily run, not on "sync now").
   if (req.headers.get("x-cron-secret") || body.gmail) {
-    const g = await gmailInvoices();
+    const g = await gmailInvoices(!!body.full);
     if (g.report.length) report.supabase_invoice = g.report.join(" · ");
     errors.push(...g.errors);
   }
