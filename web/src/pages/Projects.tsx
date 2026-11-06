@@ -100,9 +100,9 @@ export function ProjectCard({ p, f, tasks, minutes }: { p: Project; f?: Financia
   );
 }
 
-export function NewProject({ onDone, clientId }: { onDone: () => void; clientId?: string }) {
+export function NewProject({ onDone, onCancel, clientId, name = "", type = "client" }: { onDone: () => void; onCancel?: () => void; clientId?: string; name?: string; type?: string }) {
   const save = useSave("projects");
-  const [f, setF] = useState({ name: "", type: "client", agreed_price: "" });
+  const [f, setF] = useState({ name, type, agreed_price: "" });
   const [client, setClient] = useState<ClientChoice>({ id: clientId ?? "", newName: "" });
   const [error, setError] = useState("");
   return (
@@ -126,7 +126,7 @@ export function NewProject({ onDone, clientId }: { onDone: () => void; clientId?
       {error && <p className="sm:col-span-2 text-[14px] text-error">{error}</p>}
       <div className="sm:col-span-2 flex gap-3">
         <Button arrow className="group" disabled={save.isPending}>יצירה</Button>
-        <Button type="button" variant="quiet" onClick={onDone}>ביטול</Button>
+        <Button type="button" variant="quiet" onClick={onCancel ?? onDone}>ביטול</Button>
       </div>
       <p className="sm:col-span-2 text-[14px] text-mute-2">חלוקת הרווח מתחילה בחצי-חצי, ואפשר לשנות אותה בדף הפרויקט.</p>
     </form>

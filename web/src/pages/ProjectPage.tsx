@@ -7,6 +7,7 @@ import { date, hours, money, PROJECT_STATUS, PROJECT_TAG, TASK_STATUS } from "..
 import { Button, Card, Field, Input, Loading, Num, Pill, Select, Tag, Textarea } from "../components/ui";
 import { ClientPicker, resolveClient, type ClientChoice } from "../components/ClientPicker";
 import type { Project } from "../lib/data";
+import { AddChips, SectionAdd, useContextAdd } from "../components/ContextAdd";
 
 export default function ProjectPage() {
   const { id } = useParams();
@@ -19,6 +20,7 @@ export default function ProjectPage() {
   const time = useTime();
   const p = projects.data?.find((x) => x.id === id);
   const f = fin.data?.find((x) => x.project_id === id);
+  const add = useContextAdd({ projectId: p?.id, name: p?.name ?? "" });
   if (projects.isLoading) return <Loading />;
   if (!p) return <p className="text-mute">הפרויקט לא נמצא.</p>;
 
@@ -38,6 +40,7 @@ export default function ProjectPage() {
           {p.client_id && p.clients?.name && <Link to={`/clients/${p.client_id}`} className="text-[15px] text-pink hover:text-pink-soft">{p.clients.name}</Link>}
         </div>
         <h1 className="mt-1 text-[clamp(34px,5.2vw,80px)] font-semibold leading-[1.05] tracking-[-0.02em]">{p.name}</h1>
+        <div className="mt-5"><AddChips kinds={["expense", "income", "document", "task", "time", "meeting"]} onAdd={add.open} /></div>
       </header>
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -54,7 +57,7 @@ export default function ProjectPage() {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
-          <h2 className="mb-3 text-[22px] font-semibold">הוצאות</h2>
+          <div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-[22px] font-semibold">הוצאות</h2><SectionAdd label="הוצאה" onClick={() => add.open("expense")} /></div>
           {!exp.length && <p className="text-mute">אין הוצאות בפרויקט.</p>}
           {exp.map((e) => (
             <div key={e.id} className="row-line flex justify-between gap-3 py-2.5">
@@ -64,7 +67,7 @@ export default function ProjectPage() {
           ))}
         </Card>
         <Card>
-          <h2 className="mb-3 text-[22px] font-semibold">הכנסות</h2>
+          <div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-[22px] font-semibold">הכנסות</h2><SectionAdd label="תשלום" onClick={() => add.open("income")} /></div>
           {!inc.length && <p className="text-mute">אין הכנסות בפרויקט.</p>}
           {inc.map((i) => (
             <div key={i.id} className="row-line flex justify-between gap-3 py-2.5">
@@ -76,7 +79,7 @@ export default function ProjectPage() {
       </div>
 
       <Card>
-        <h2 className="mb-3 text-[22px] font-semibold">משימות פתוחות</h2>
+        <div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-[22px] font-semibold">משימות פתוחות</h2><SectionAdd label="משימה" onClick={() => add.open("task")} /></div>
         {!tsk.length && <p className="text-mute">אין משימות פתוחות.</p>}
         {tsk.map((t) => (
           <div key={t.id} className="row-line flex justify-between gap-3 py-2.5">
@@ -85,6 +88,7 @@ export default function ProjectPage() {
           </div>
         ))}
       </Card>
+      {add.modal}
     </div>
   );
 }

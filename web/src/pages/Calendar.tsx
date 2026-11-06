@@ -79,7 +79,7 @@ export default function CalendarPage() {
       </Card>
 
       <Modal open={!!modal} onClose={() => setModal(null)} title={modal?.row ? "עריכת פגישה" : "פגישה חדשה"}>
-        <MeetingForm row={modal?.row} onDone={() => setModal(null)} />
+        <MeetingForm key={modal?.row?.id ?? selected} row={modal?.row} startsAt={`${selected}T09:00`} onDone={() => setModal(null)} />
       </Modal>
     </div>
   );

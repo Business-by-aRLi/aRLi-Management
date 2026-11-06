@@ -3,8 +3,9 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
-import { uploadReceipt, usePartners, useProjects, useSave, useWorkPlans, type Expense, type Income, type Task, type Meeting } from "../lib/data";
+import { uploadReceipt, useExpenses, usePartners, useProjects, useSave, type Expense, type Income, type Task, type Meeting } from "../lib/data";
 import { Button, Field, Input, Select, Textarea } from "./ui";
+import { currentQuarter, PlanPicker, ProjectPicker } from "./Pickers";
 
 // The partner who is signed in, used as the default payer/receiver/assignee.
 export function useMe() {
@@ -19,16 +20,6 @@ function PartnerSelect({ value, onChange, allowNone }: { value: string; onChange
     <Select value={value} onChange={(e) => onChange(e.target.value)}>
       {allowNone && <option value="">{allowNone}</option>}
       {partners.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-    </Select>
-  );
-}
-
-function ProjectSelect({ value, onChange, none = "כללי לעסק (חצי-חצי)" }: { value: string; onChange: (v: string) => void; none?: string }) {
-  const projects = useProjects();
-  return (
-    <Select value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">{none}</option>
-      {projects.data?.filter((p) => p.status !== "closed" || p.id === value).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
     </Select>
   );
 }
@@ -50,8 +41,11 @@ type IncomeFields = { amount: string; received_on: string; project_id: string; r
 
 // `initial` prefills a new row (from a parsed document); `receiptPath` is a document that is already uploaded;
 // `onCancel` runs instead of onDone when the partner cancels (so an unused upload can be removed).
-export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel }: {
-  row?: Expense; onDone: () => void; initial?: Partial<ExpenseFields>; receiptPath?: string; onCancel?: () => void;
+// `only`/`clientId` come from a client page: the project list is that client's projects, and a new one is linked to them.
+export type Context = { only?: string[]; clientId?: string };
+
+export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel, context }: {
+  row?: Expense; onDone: () => void; initial?: Partial<ExpenseFields>; receiptPath?: string; onCancel?: () => void; context?: Context;
 }) {
   const me = useMe();
   const save = useSave("expenses");
@@ -83,9 +77,9 @@ export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel }: {
       <Field label="סכום (₪)"><Input required type="number" step="0.01" min="0.01" inputMode="decimal" value={f.amount} onChange={(e) => set("amount")(e.target.value)} /></Field>
       <Field label="תאריך"><Input required type="date" value={f.spent_on} onChange={(e) => set("spent_on")(e.target.value)} /></Field>
       <div className="sm:col-span-2"><Field label="על מה"><Input required value={f.description} onChange={(e) => set("description")(e.target.value)} /></Field></div>
-      <Field label="פרויקט"><ProjectSelect value={f.project_id} onChange={set("project_id")} /></Field>
+      <Field label="פרויקט"><ProjectPicker value={f.project_id} onChange={set("project_id")} {...context} /></Field>
       <Field label="מי שילמה"><PartnerSelect value={f.paid_by_partner_id} onChange={set("paid_by_partner_id")} /></Field>
-      <Field label="קטגוריה"><Input value={f.category} onChange={(e) => set("category")(e.target.value)} placeholder="תוכנה, ציוד, נסיעות…" /></Field>
+      <Field label="קטגוריה"><Input list="expense-categories" value={f.category} onChange={(e) => set("category")(e.target.value)} placeholder="תוכנה, ציוד, נסיעות…" /><CategoryList /></Field>
       <Field label="אסמכתה"><Input value={f.reference} onChange={(e) => set("reference")(e.target.value)} /></Field>
       <div className="sm:col-span-2"><Field label="הערות"><Input value={f.notes} onChange={(e) => set("notes")(e.target.value)} /></Field></div>
       {!receiptPath && <div className="sm:col-span-2"><ReceiptInput hasExisting={!!row?.receipt_path} file={file} setFile={setFile} /></div>}
@@ -94,8 +88,8 @@ export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel }: {
   );
 }
 
-export function IncomeForm({ row, onDone, initial, receiptPath, onCancel }: {
-  row?: Income; onDone: () => void; initial?: Partial<IncomeFields>; receiptPath?: string; onCancel?: () => void;
+export function IncomeForm({ row, onDone, initial, receiptPath, onCancel, context }: {
+  row?: Income; onDone: () => void; initial?: Partial<IncomeFields>; receiptPath?: string; onCancel?: () => void; context?: Context;
 }) {
   const me = useMe();
   const projects = useProjects();
@@ -111,7 +105,8 @@ export function IncomeForm({ row, onDone, initial, receiptPath, onCancel }: {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    const client_id = projects.data?.find((p) => p.id === f.project_id)?.client_id ?? null;
+    // The payer is the project's client; without a project, the client page we came from (or the one already saved).
+    const client_id = projects.data?.find((p) => p.id === f.project_id)?.client_id ?? context?.clientId ?? row?.client_id ?? null;
     const receipt_path = file ? await uploadReceipt(file) : receiptPath ?? row?.receipt_path ?? null;
     await save.mutateAsync({
       id: row?.id,
@@ -128,7 +123,7 @@ export function IncomeForm({ row, onDone, initial, receiptPath, onCancel }: {
     <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
       <Field label="סכום (₪)"><Input required type="number" step="0.01" min="0.01" inputMode="decimal" value={f.amount} onChange={(e) => set("amount")(e.target.value)} /></Field>
       <Field label="תאריך"><Input required type="date" value={f.received_on} onChange={(e) => set("received_on")(e.target.value)} /></Field>
-      <Field label="פרויקט"><ProjectSelect value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" /></Field>
+      <Field label="פרויקט"><ProjectPicker value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" {...context} /></Field>
       <Field label="מי קיבלה"><PartnerSelect value={f.received_by_partner_id} onChange={set("received_by_partner_id")} /></Field>
       <Field label="אמצעי תשלום"><Input value={f.method} onChange={(e) => set("method")(e.target.value)} placeholder="העברה, ביט, צ׳ק…" /></Field>
       <Field label="אסמכתה"><Input value={f.reference} onChange={(e) => set("reference")(e.target.value)} /></Field>
@@ -137,6 +132,13 @@ export function IncomeForm({ row, onDone, initial, receiptPath, onCancel }: {
       <div className="sm:col-span-2"><Actions pending={save.isPending} error={save.error} onCancel={onCancel ?? onDone} /></div>
     </form>
   );
+}
+
+// The categories already in use, offered as suggestions; a new one is just typed.
+function CategoryList() {
+  const expenses = useExpenses();
+  const cats = [...new Set((expenses.data ?? []).map((e) => e.category?.trim()).filter(Boolean))] as string[];
+  return <datalist id="expense-categories">{cats.sort((a, b) => a.localeCompare(b, "he")).map((c) => <option key={c} value={c} />)}</datalist>;
 }
 
 function ReceiptInput({ hasExisting, file, setFile, label = "קבלה" }: { hasExisting: boolean; file: File | null; setFile: (f: File | null) => void; label?: string }) {
@@ -168,13 +170,14 @@ export function SettlementForm({ from, to, amount, onDone }: { from?: string; to
   );
 }
 
-export function TaskForm({ row, projectId, startOn, onDone }: { row?: Task; projectId?: string; startOn?: string; onDone: () => void }) {
+export function TaskForm({ row, projectId, startOn, workPlanId, title, onDone, onCancel, context }: {
+  row?: Task; projectId?: string; startOn?: string; workPlanId?: string; title?: string; onDone: () => void; onCancel?: () => void; context?: Context;
+}) {
   const save = useSave("tasks");
-  const plans = useWorkPlans();
   const [f, setF] = useState({
-    title: row?.title ?? "", description: row?.description ?? "", project_id: row?.project_id ?? projectId ?? "",
+    title: row?.title ?? title ?? "", description: row?.description ?? "", project_id: row?.project_id ?? projectId ?? "",
     assignee_partner_id: row?.assignee_partner_id ?? "", due_on: row?.due_on ?? "", priority: String(row?.priority ?? 2),
-    start_on: row?.start_on ?? startOn ?? "", work_plan_id: row?.work_plan_id ?? "",
+    start_on: row?.start_on ?? startOn ?? "", work_plan_id: row?.work_plan_id ?? workPlanId ?? "",
   });
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
   async function submit(e: FormEvent) {
@@ -193,23 +196,18 @@ export function TaskForm({ row, projectId, startOn, onDone }: { row?: Task; proj
   return (
     <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
       <div className="sm:col-span-2"><Field label="משימה"><Input required value={f.title} onChange={(e) => set("title")(e.target.value)} /></Field></div>
-      <Field label="פרויקט"><ProjectSelect value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" /></Field>
+      <Field label="פרויקט"><ProjectPicker value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" {...context} /></Field>
       <Field label="אחראית"><PartnerSelect value={f.assignee_partner_id} onChange={set("assignee_partner_id")} allowNone="שתינו" /></Field>
       <Field label="מתחילה"><Input type="date" value={f.start_on} onChange={(e) => set("start_on")(e.target.value)} /></Field>
       <Field label="דדליין"><Input type="date" value={f.due_on} onChange={(e) => set("due_on")(e.target.value)} /></Field>
-      <Field label="שייכת ליעד">
-        <Select value={f.work_plan_id} onChange={(e) => set("work_plan_id")(e.target.value)}>
-          <option value="">בלי יעד</option>
-          {plans.data?.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
-        </Select>
-      </Field>
+      <Field label="שייכת ליעד"><PlanPicker value={f.work_plan_id} onChange={set("work_plan_id")} /></Field>
       <Field label="עדיפות">
         <Select value={f.priority} onChange={(e) => set("priority")(e.target.value)}>
           <option value="1">גבוהה</option><option value="2">רגילה</option><option value="3">נמוכה</option>
         </Select>
       </Field>
       <div className="sm:col-span-2"><Field label="פירוט"><Textarea value={f.description} onChange={(e) => set("description")(e.target.value)} /></Field></div>
-      <div className="sm:col-span-2"><Actions pending={save.isPending} error={save.error} onCancel={onDone} /></div>
+      <div className="sm:col-span-2"><Actions pending={save.isPending} error={save.error} onCancel={onCancel ?? onDone} /></div>
     </form>
   );
 }
@@ -217,12 +215,15 @@ export function TaskForm({ row, projectId, startOn, onDone }: { row?: Task; proj
 // datetime-local works in the browser's own time zone, which for both partners is Israel.
 const toLocalInput = (iso?: string | null) => (iso ? new Date(new Date(iso).getTime() - new Date(iso).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "");
 
-export function MeetingForm({ row, onDone }: { row?: Meeting & { project_id?: string | null; notes?: string | null }; onDone: () => void }) {
+// `startsAt` (datetime-local text) and `projectId` prefill a new meeting: the day picked in the calendar, the project page.
+export function MeetingForm({ row, onDone, startsAt, projectId, context }: {
+  row?: Meeting & { project_id?: string | null; notes?: string | null }; onDone: () => void; startsAt?: string; projectId?: string; context?: Context;
+}) {
   const me = useMe();
   const save = useSave("meetings");
   const [f, setF] = useState({
-    title: row?.title ?? "", starts_at: toLocalInput(row?.starts_at), ends_at: toLocalInput(row?.ends_at),
-    location: row?.location ?? "", project_id: row?.project_id ?? "", notes: row?.notes ?? "",
+    title: row?.title ?? "", starts_at: row ? toLocalInput(row.starts_at) : startsAt ?? "", ends_at: toLocalInput(row?.ends_at),
+    location: row?.location ?? "", project_id: row?.project_id ?? projectId ?? "", notes: row?.notes ?? "",
   });
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
   async function submit(e: FormEvent) {
@@ -243,17 +244,17 @@ export function MeetingForm({ row, onDone }: { row?: Meeting & { project_id?: st
       <Field label="מתחילה"><Input required type="datetime-local" value={f.starts_at} onChange={(e) => set("starts_at")(e.target.value)} /></Field>
       <Field label="נגמרת"><Input type="datetime-local" value={f.ends_at} onChange={(e) => set("ends_at")(e.target.value)} /></Field>
       <Field label="מקום / קישור"><Input value={f.location} onChange={(e) => set("location")(e.target.value)} /></Field>
-      <Field label="פרויקט"><ProjectSelect value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" /></Field>
+      <Field label="פרויקט"><ProjectPicker value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" {...context} /></Field>
       <div className="sm:col-span-2"><Field label="הערות"><Textarea value={f.notes} onChange={(e) => set("notes")(e.target.value)} /></Field></div>
       <div className="sm:col-span-2"><Actions pending={save.isPending} error={save.error} onCancel={onDone} /></div>
     </form>
   );
 }
 
-export function TimeForm({ onDone }: { onDone: () => void }) {
+export function TimeForm({ onDone, projectId, context }: { onDone: () => void; projectId?: string; context?: Context }) {
   const me = useMe();
   const save = useSave("time_entries");
-  const [f, setF] = useState({ hours: "", project_id: "", kind: "work", work_date: today(), description: "", partner_id: "" });
+  const [f, setF] = useState({ hours: "", project_id: projectId ?? "", kind: "work", work_date: today(), description: "", partner_id: "" });
   useEffect(() => { if (!f.partner_id && me) setF((s) => ({ ...s, partner_id: me.id })); }, [me]);
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
   async function submit(e: FormEvent) {
@@ -270,7 +271,7 @@ export function TimeForm({ onDone }: { onDone: () => void }) {
     <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
       <Field label="שעות"><Input required type="number" step="0.25" min="0.25" inputMode="decimal" value={f.hours} onChange={(e) => set("hours")(e.target.value)} /></Field>
       <Field label="תאריך"><Input required type="date" value={f.work_date} onChange={(e) => set("work_date")(e.target.value)} /></Field>
-      <Field label="פרויקט"><ProjectSelect value={f.project_id} onChange={set("project_id")} none="כללי" /></Field>
+      <Field label="פרויקט"><ProjectPicker value={f.project_id} onChange={set("project_id")} none="כללי" {...context} /></Field>
       <Field label="סוג">
         <Select value={f.kind} onChange={(e) => set("kind")(e.target.value)}><option value="work">עבודה</option><option value="learning">למידה</option></Select>
       </Field>
@@ -283,12 +284,9 @@ export function TimeForm({ onDone }: { onDone: () => void }) {
 
 export function PlanForm({ row, onDone }: { row?: { id: string; title: string; period_start: string | null; period_end: string | null; goals: string | null }; onDone: () => void }) {
   const save = useSave("work_plans");
-  const now = new Date();
-  const qStart = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
-  const qEnd = new Date(qStart.getFullYear(), qStart.getMonth() + 3, 0);
-  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const q = currentQuarter();
   const [f, setF] = useState({
-    title: row?.title ?? "", period_start: row?.period_start ?? iso(qStart), period_end: row?.period_end ?? iso(qEnd), goals: row?.goals ?? "",
+    title: row?.title ?? "", period_start: row?.period_start ?? q.start, period_end: row?.period_end ?? q.end, goals: row?.goals ?? "",
   });
   return (
     <form className="grid gap-4 sm:grid-cols-2" onSubmit={async (e) => {
