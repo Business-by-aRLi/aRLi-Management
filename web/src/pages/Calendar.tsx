@@ -109,21 +109,56 @@ function SwipePeek({ dx, label }: { dx: number; label: string }) {
   );
 }
 
+// Phone: the week around the chosen day, one tap to any day, with a dot where something is planned.
+function WeekStrip({ anchor, view, events, deadlines, onPick, onWeek }: {
+  anchor: Date; view: View; events: Meeting[]; deadlines: Task[]; onPick: (d: Date) => void; onWeek: (n: number) => void;
+}) {
+  const start = addDays(anchor, -anchor.getDay());
+  const todayKey = ymd(new Date());
+  const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
+  return (
+    <div className="mt-1.5 flex items-center gap-0.5">
+      <IconButton icon="chevronPrev" size={36} label="השבוע הקודם" onClick={() => onWeek(-1)} />
+      <div className="grid flex-1 grid-cols-7">
+        {days.map((d) => {
+          const key = ymd(d);
+          const sel = view === "day" && key === ymd(anchor);
+          const n = events.filter((m) => ymd(new Date(m.starts_at)) === key).length;
+          const due = deadlines.some((t) => t.due_on === key);
+          return (
+            <button key={key} type="button" onClick={() => onPick(d)} aria-pressed={sel} aria-current={key === todayKey ? "date" : undefined}
+              aria-label={`${d.toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" })}${n ? `, ${n} אירועים` : ""}${due ? ", דדליין" : ""}`}
+              className="press flex flex-col items-center gap-0.5 rounded-[14px] py-1">
+              <span className={`text-[12px] ${key === todayKey ? "font-semibold text-pink-soft" : "text-mute"}`}>{DAYS[d.getDay()]}</span>
+              <span className={`grid size-9 place-items-center rounded-full text-[16px] transition-colors duration-300 ${sel ? "bg-pink font-semibold text-on-pink" : key === todayKey ? "font-semibold text-pink-soft shadow-[inset_0_0_0_1.5px_var(--pink)]" : "text-bone"}`}><Num>{d.getDate()}</Num></span>
+              <span className="flex h-1.5 gap-0.5" aria-hidden>
+                {n > 0 && <span className="size-1.5 rounded-full bg-bone/70" />}
+                {due && <span className="size-1.5 rounded-full bg-pink" />}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <IconButton icon="chevronNext" size={36} label="השבוע הבא" onClick={() => onWeek(1)} />
+    </div>
+  );
+}
+
 const Kbd = ({ children }: { children: React.ReactNode }) => (
   <kbd className="mx-0.5 inline-grid min-w-6 place-items-center rounded-[6px] px-1.5 font-sans text-[12px] text-bone shadow-[inset_0_0_0_1px_var(--line-2),inset_0_-1px_0_var(--line-2)]">{children}</kbd>
 );
 
 // One line of momentum above the calendar: what is built into this period, and one invitation when it is empty.
 function Momentum({ period, focusH, meetings, due, onBlock }: { period: string; focusH: number; meetings: number; due: number; onBlock: () => void }) {
-  const chip = "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] shadow-[inset_0_0_0_1px_var(--line)] sm:gap-2 sm:px-3.5 sm:py-1.5 sm:text-[14px]";
+  const chip = "inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[13px] shadow-[inset_0_0_0_1px_var(--line)] sm:gap-2 sm:px-3.5 sm:py-1.5 sm:text-[14px]";
   return (
-    <div className="flex flex-wrap items-center gap-2" aria-label={`${period} ביומן`}>
-      <span className="text-[14px] font-medium text-mute">{period}:</span>
+    <div className="no-scrollbar -mx-[var(--gutter)] flex items-center gap-2 overflow-x-auto px-[var(--gutter)] sm:mx-0 sm:flex-wrap sm:px-0" aria-label={`${period} ביומן`}>
+      <span className="shrink-0 text-[14px] font-medium text-mute">{period}:</span>
       <span className={chip}><Icon name="focus" size={15} className="text-pink-soft" /><Num>{focusH}</Num> שעות עבודה ממוקדת</span>
       <span className={chip}><Icon name="meeting" size={15} className="text-pink-soft" /><Num>{meetings}</Num> פגישות</span>
       {due > 0 && <span className={chip}><Icon name="flag" size={15} className="text-pink-soft" /><Num>{due}</Num> דדליינים</span>}
       {focusH === 0 && (
-        <button type="button" onClick={onBlock} className="press inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[14px] font-medium text-pink-soft hover:bg-pink/10">
+        <button type="button" onClick={onBlock} className="press inline-flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[14px] font-medium text-pink-soft hover:bg-pink/10">
           <Icon name="plus" size={15} />לחסום זמן לבנייה
         </button>
       )}
@@ -161,7 +196,11 @@ export default function CalendarPage() {
   }, [view, anchor]);
   const fromIso = range.from.toISOString();
   const toIso = addDays(range.from, range.days).toISOString();
-  const meetings = useMeetings(new Date(range.from.getTime() - 864e5).toISOString(), toIso);
+  // The day view loads its whole week too, so the phone's week strip can show which days are busy.
+  const weekFrom = addDays(anchor, -anchor.getDay());
+  const qFrom = view === "day" ? weekFrom : range.from;
+  const qTo = view === "day" ? addDays(weekFrom, 7).toISOString() : toIso;
+  const meetings = useMeetings(new Date(qFrom.getTime() - 864e5).toISOString(), qTo);
   const busy = useBusy(fromIso, toIso);
   const tasks = useTasks();
   const rituals = useRituals();
@@ -190,6 +229,12 @@ export default function CalendarPage() {
       ? anchor.toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" })
       : `${range.from.toLocaleDateString("he-IL", { day: "numeric", month: "long" })} – ${addDays(range.from, range.days - 1).toLocaleDateString("he-IL", { day: "numeric", month: "long" })}`;
   const isToday = view === "day" && ymd(anchor) === ymd(new Date());
+  const todayMs = dayStart(new Date()).getTime();
+  const onToday = todayMs >= range.from.getTime() && todayMs < new Date(toIso).getTime() && (view !== "month" || anchor.getMonth() === new Date().getMonth());
+  const phoneTitle = view === "day"
+    ? anchor.toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" })
+    : view === "month" ? title
+      : `${range.from.getDate()}–${addDays(range.from, range.days - 1).toLocaleDateString("he-IL", { day: "numeric", month: "long" })}`;
 
   const swipe = useSwipe(shift);
   // Keyboard: arrows move (RTL), T is today, D/W/M/L switch views. Not while typing or while a dialog is open.
@@ -238,6 +283,30 @@ export default function CalendarPage() {
 
   return (
     <div className="space-y-4 sm:space-y-6">
+      {/* Phone: one compact bar that stays on top while the day scrolls, with a week strip to jump between days. */}
+      <div className="cal-bar sticky top-0 z-30 -mx-[var(--gutter)] -mt-8 px-[var(--gutter)] pb-2 sm:hidden">
+        <div className="flex items-center justify-between gap-2">
+          <h1 aria-live="polite" className="min-w-0 truncate text-[22px] font-semibold leading-tight tracking-[-0.01em]">{phoneTitle}</h1>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {!onToday && <button type="button" onClick={goToday} className="press h-10 rounded-full px-3.5 text-[14px] font-semibold text-bone shadow-[inset_0_0_0_1px_var(--line-2)]">היום</button>}
+            <IconButton icon="plus" tone="pink" size={40} label="אירוע חדש" onClick={() => setDraft({ startsAt: `${ymd(anchor.getTime() < Date.now() ? new Date() : anchor)}T09:00` })} />
+          </div>
+        </div>
+        {view !== "month" && (
+          <WeekStrip anchor={anchor} view={view} events={events} deadlines={deadlines}
+            onPick={(d) => { go(d, d > anchor ? "next" : d < anchor ? "prev" : null); if (view !== "day") setView("day"); }}
+            onWeek={(n) => go(addDays(anchor, n * 7), n > 0 ? "next" : "prev")} />
+        )}
+        {view === "month" && (
+          <div className="mt-1.5 flex items-center justify-between">
+            <IconButton icon="chevronPrev" size={40} label={`הקודם (${peek(-1)})`} onClick={() => shift(-1)} />
+            <span className="text-[14px] text-mute">החליקי לחודש אחר</span>
+            <IconButton icon="chevronNext" size={40} label={`הבא (${peek(1)})`} onClick={() => shift(1)} />
+          </div>
+        )}
+      </div>
+
+      <div className="hidden sm:block">
       <PageTitle eyebrow="יומן משותף" title={<span aria-live="polite">{title}</span>} action={
         <div className="flex flex-wrap items-center gap-2">
           <div role="group" aria-label="מעבר בין תאריכים" className="inline-flex items-center rounded-full p-0.5 shadow-[inset_0_0_0_1px_var(--line-2)]">
@@ -246,13 +315,11 @@ export default function CalendarPage() {
               className="press h-11 rounded-full px-4 text-[15px] font-semibold text-bone transition-colors duration-300 hover:bg-[var(--hover-veil)]">היום</button>
             <IconButton icon="chevronNext" size={44} label={`הבא (${peek(1)})`} onClick={() => shift(1)} />
           </div>
-          <Button variant="ghost" className="!hidden !py-2 text-[15px] sm:!inline-flex" onClick={() => setFinder(true)}><Icon name="search" size={16} />מצאי זמן פנוי</Button>
-          <Button arrow className="group !hidden sm:!inline-flex" onClick={() => setDraft({ startsAt: `${ymd(anchor.getTime() < Date.now() ? new Date() : anchor)}T09:00` })}>אירוע חדש</Button>
-          {/* Phone: the same two actions as round buttons, so the calendar itself starts higher on the screen */}
-          <IconButton className="sm:!hidden" icon="search" tone="ghost" size={44} label="מצאי זמן פנוי" onClick={() => setFinder(true)} />
-          <IconButton className="sm:!hidden" icon="plus" tone="pink" size={44} label="אירוע חדש" onClick={() => setDraft({ startsAt: `${ymd(anchor.getTime() < Date.now() ? new Date() : anchor)}T09:00` })} />
+          <Button variant="ghost" className="!py-2 text-[15px]" onClick={() => setFinder(true)}><Icon name="search" size={16} />מצאי זמן פנוי</Button>
+          <Button arrow className="group" onClick={() => setDraft({ startsAt: `${ymd(anchor.getTime() < Date.now() ? new Date() : anchor)}T09:00` })}>אירוע חדש</Button>
         </div>
       } />
+      </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
@@ -264,6 +331,7 @@ export default function CalendarPage() {
         </div>
         <div id="cal-filters" className={`${filters ? "flex" : "hidden"} w-full flex-wrap items-center justify-between gap-3 sm:flex sm:w-auto sm:flex-1`}>
         <div className="flex flex-wrap items-center gap-2">
+          <Button variant="ghost" className="!py-2 text-[15px] sm:!hidden" onClick={() => setFinder(true)}><Icon name="search" size={16} />מצאי זמן פנוי</Button>
           <Segmented label="של מי" value={layer} onChange={setLayer} options={[["all", "שתינו"], ["mine", "שלי"], ["other", other ? `של ${other.name}` : "שלה"]]} />
           <label className="flex items-center gap-2 px-2 text-[14px] text-mute">
             <input type="checkbox" checked={showBusy} onChange={(e) => setShowBusy(e.target.checked)} className="size-4 accent-[var(--pink)]" />
@@ -412,8 +480,12 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
     const d = new Date(day); d.setHours(FIRST_H, 0, 0, 0); d.setMinutes(mins); return d;
   };
 
+  // On a touch screen a finger on an event scrolls the day or swipes to the next one, and a tap opens it;
+  // moving it is done in the form. Dragging is for mouse and pen.
+  const touchTap = useRef(false);
   function startDrag(e: ReactPointerEvent, m: Meeting) {
-    if (e.button !== 0) return;
+    touchTap.current = e.pointerType === "touch";
+    if (touchTap.current || e.button !== 0) return;
     const col = (e.currentTarget as HTMLElement).closest("[data-day]") as HTMLElement | null;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     setDrag({ id: m.id, x: e.clientX, y: e.clientY, dx: 0, dy: 0, colW: col?.offsetWidth ?? 100 });
@@ -442,14 +514,14 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
               const due = deadlines.filter((t) => t.due_on === key);
               const rit = rituals.filter((r) => r.on === key);
               return (
-                <div key={key} className={`min-w-0 px-1 pb-2 pt-3 ${key === todayKey ? "bg-pink/[.06]" : ""}`}>
+                <div key={key} className={`min-w-0 px-1 pb-1 pt-1 sm:pb-2 sm:pt-3 ${key === todayKey ? "bg-pink/[.06]" : ""}`}>
                   {(() => {
                     const label = d.toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" });
                     const inner = (<>
                       <span className={key === todayKey ? "font-semibold text-pink-soft" : ""}>{single ? d.toLocaleDateString("he-IL", { weekday: "long" }) : DAYS[d.getDay()]}</span>
                       <span className={`inline-grid size-8 place-items-center rounded-full text-[15px] ${key === todayKey ? "bg-pink font-semibold text-on-pink" : "text-bone"}`}><Num>{d.getDate()}</Num></span>
                     </>);
-                    const cls = "mx-auto mb-1.5 flex flex-col items-center gap-0.5 rounded-[12px] px-1 py-0.5 text-[13px] text-mute sm:flex-row sm:justify-center sm:gap-1.5 sm:text-[14px]";
+                    const cls = `hidden sm:flex mx-auto mb-1.5 flex-col items-center gap-0.5 rounded-[12px] px-1 py-0.5 text-[13px] text-mute sm:flex-row sm:justify-center sm:gap-1.5 sm:text-[14px]`;
                     return onDayOpen
                       ? <button type="button" onClick={() => onDayOpen(d)} aria-label={`${label}, פתיחת היום`} aria-current={key === todayKey ? "date" : undefined} className={`press ${cls} hover:bg-[var(--hover-veil)]`}>{inner}</button>
                       : <div className={cls} aria-current={key === todayKey ? "date" : undefined}>{inner}</div>;
@@ -466,7 +538,7 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
             })}
           </div>
           {/* time grid */}
-          <div ref={scroller} className="max-h-[68vh] overflow-y-auto">
+          <div ref={scroller} className="sm:max-h-[68vh] sm:overflow-y-auto">
             <div className="relative grid" style={{ ...cols, height: hours.length * HOUR_PX }}>
               <div className="relative">
                 {hours.map((h, i) => <div key={h} className="absolute inset-x-0 pe-1.5 text-end text-[12px] text-mute sm:pe-2" style={{ top: i * HOUR_PX - 8 }}>{i > 0 && <Num>{`${pad(h)}:00`}</Num>}</div>)}
@@ -506,14 +578,15 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
                       const dragging = drag?.id === m.id;
                       const ini = initials(m.partner_ids, partners);
                       return (
-                        <button key={m.id} data-noswipe
+                        <button key={m.id}
+                          onClick={() => { if (touchTap.current) { touchTap.current = false; onOpen(m); } }}
                           aria-label={`${KIND[m.kind].label}: ${m.title}, ${hm(m.starts_at)} עד ${hm(endOf(m))}, ${who(m.partner_ids)}${m.projects?.name ? `, ${m.projects.name}` : ""}`}
                           onPointerDown={(e) => startDrag(e, m)}
                           onPointerMove={(e) => dragging && setDrag({ ...drag!, dx: e.clientX - drag!.x, dy: e.clientY - drag!.y })}
                           onPointerUp={() => endDrag(m)}
                           onPointerCancel={() => setDrag(null)}
                           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(m); } }}
-                          className={`absolute touch-none overflow-hidden rounded-[8px] px-1.5 py-1 text-start text-[12px] leading-tight transition-shadow ${KIND[m.kind].cls} ${dragging ? "z-20 cursor-grabbing opacity-90 shadow-[var(--lift-shadow)]" : "z-10 cursor-grab hover:brightness-[1.06]"}`}
+                          className={`absolute overflow-hidden [@media(pointer:fine)]:touch-none rounded-[8px] px-1.5 py-1 text-start text-[12px] leading-tight transition-shadow ${KIND[m.kind].cls} ${dragging ? "z-20 cursor-grabbing opacity-90 shadow-[var(--lift-shadow)]" : "z-10 cursor-grab hover:brightness-[1.06]"}`}
                           style={{
                             top: top + 1, height: Math.max(20, height - 2),
                             insetInlineStart: `calc(${(col / cols) * 100}% + 2px)`, width: `calc(${100 / cols}% - 4px)`,
@@ -523,7 +596,7 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
                             <span className="truncate font-semibold">{m.title}</span>
                             {ini && <span className="hidden shrink-0 text-[11px] opacity-80 sm:inline">{ini}</span>}
                           </div>
-                          {height > 34 && <div className="truncate opacity-80"><Num>{hm(m.starts_at)}</Num>{m.meet_link ? " · Meet" : m.location ? ` · ${m.location}` : ""}</div>}
+                          {height > 34 && <div className={`truncate opacity-80 ${single ? "" : "hidden sm:block"}`}><Num>{hm(m.starts_at)}</Num>{m.meet_link ? " · Meet" : m.location ? ` · ${m.location}` : ""}</div>}
                           {height > 52 && m.projects?.name && <div className="truncate opacity-70">{m.projects.name}</div>}
                         </button>
                       );
