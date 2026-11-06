@@ -265,7 +265,7 @@ export function BalanceModule() {
       </section>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-[13px] text-mute-2">
-        <span>רווח מפרויקט מתחלק לפי החלוקה שלו. הוצאות כלליות מתחלקות חצי-חצי.</span>
+        <span>קודם מכסים את ההוצאות הכלליות של העסק מכל רווחי הפרויקטים. רק את מה שנשאר מחלקים, לפי היחס שבו כל אחת הרוויחה מהפרויקטים.</span>
         {gets && gives && <Button variant="ghost" className="!py-1.5 text-[14px]" onClick={() => setSettle(true)}>רישום העברה</Button>}
       </div>
       <Modal open={settle} onClose={() => setSettle(false)} title="רישום העברה בין השותפות">
