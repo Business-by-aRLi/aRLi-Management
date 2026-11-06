@@ -5,7 +5,7 @@ import { must, supabase } from "./supabase";
 export type Partner = { id: string; name: string; email: string | null; user_id: string | null };
 export type Project = {
   id: string; name: string; type: string; status: string; client_id: string | null;
-  agreed_price: number | null; notes: string | null; started_on: string | null; closed_on: string | null; clients?: { name: string } | null;
+  agreed_price: number | null; notes: string | null; started_on: string | null; closed_on: string | null; delivered_on?: string | null; clients?: { name: string } | null;
 };
 export type Client = { id: string; name: string; contact_name: string | null; phone: string | null; email: string | null; notes: string | null; created_at: string };
 export type Idea = { id: string; title: string; description: string | null; status: string; created_by_partner_id: string | null; created_at: string; partners?: { name: string } | null };
@@ -155,3 +155,84 @@ export async function parseDocument(path: string): Promise<ParsedDocument> {
   }
   return data as ParsedDocument;
 }
+
+// ---------- leads and quotes ----------
+export type Lead = {
+  id: string; name: string; company: string | null; phone: string | null; email: string | null; source: string | null;
+  stage: string; estimated_value: number | null; next_follow_up_on: string | null; follow_up_note: string | null;
+  owner_partner_id: string | null; client_id: string | null; project_id: string | null; lost_reason: string | null;
+  notes: string | null; stage_changed_at: string; created_at: string; partners?: { name: string } | null;
+};
+export type LeadActivity = { id: string; lead_id: string; kind: string; body: string; partner_id: string | null; created_at: string; partners?: { name: string } | null };
+export type QuoteSection = { title: string; body: string };
+export type QuoteItem = { id?: string; description: string; details: string | null; quantity: number; unit_price: number; recurring: boolean; sort_order?: number };
+export type Quote = {
+  id: string; kind: "document" | "portal"; portal_template: string | null; submitted_at: string | null; meeting_id: string | null; number: string; lead_id: string | null; client_id: string | null; project_id: string | null;
+  recipient_name: string | null; title: string; intro: string | null; sections: QuoteSection[]; status: string;
+  issued_on: string; valid_until: string; discount_type: "amount" | "percent"; discount_value: number; include_vat: boolean; vat_rate: number;
+  subtotal: number; total: number; payment_terms: string | null; timeline: string | null; notes: string | null; public_token: string;
+  sent_at: string | null; sent_via: string | null; viewed_at: string | null; view_count: number; responded_at: string | null;
+  signer_name: string | null; response_note: string | null; created_at: string;
+  leads?: { name: string; company: string | null; phone: string | null; email: string | null } | null;
+  clients?: { name: string } | null; projects?: { name: string } | null;
+};
+export const useLeads = () => q<Lead[]>(["leads"], () => supabase.from("leads").select("*,partners(name)").order("created_at", { ascending: false }));
+export const useLeadActivities = (leadId: string) => q<LeadActivity[]>(["lead_activities", leadId], () =>
+  supabase.from("lead_activities").select("*,partners(name)").eq("lead_id", leadId).order("created_at", { ascending: false }));
+export const useQuotes = () => q<Quote[]>(["quotes"], () =>
+  supabase.from("quotes").select("*,leads(name,company,phone,email),clients(name),projects(name)").order("created_at", { ascending: false }));
+export const useQuoteItems = (quoteId: string | undefined) => useQuery<QuoteItem[]>({
+  queryKey: ["quote_items", quoteId], enabled: !!quoteId,
+  queryFn: async () => must(await supabase.from("quote_items").select("*").eq("quote_id", quoteId!).order("sort_order")) as QuoteItem[],
+});
+
+// Saves a quote and replaces its items in one go; returns the quote id.
+export function useSaveQuote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, values, items }: { id?: string; values: Record<string, unknown>; items: QuoteItem[] }) => {
+      let quoteId = id;
+      if (quoteId) must(await supabase.from("quotes").update(values).eq("id", quoteId));
+      else quoteId = (must(await supabase.from("quotes").insert(values).select("id").single()) as { id: string }).id;
+      must(await supabase.from("quote_items").delete().eq("quote_id", quoteId));
+      const rows = items.filter((i) => i.description.trim()).map((i, n) => ({
+        quote_id: quoteId, description: i.description.trim(), details: i.details?.trim() || null,
+        quantity: Number(i.quantity) || 0, unit_price: Number(i.unit_price) || 0, recurring: i.recurring, sort_order: n,
+      }));
+      if (rows.length) must(await supabase.from("quote_items").insert(rows));
+      return quoteId!;
+    },
+    onSuccess: () => qc.invalidateQueries(),
+  });
+}
+
+export type PublicQuote = Omit<Quote, "id" | "lead_id" | "client_id" | "project_id" | "notes" | "public_token" | "sent_at" | "sent_via" | "viewed_at" | "view_count" | "response_note" | "created_at" | "leads" | "clients" | "projects"> & {
+  expired: boolean; items: QuoteItem[];
+};
+export async function getPublicQuote(token: string, track: boolean) {
+  return must(await supabase.rpc("get_public_quote", { p_token: token, p_track: track })) as PublicQuote | null;
+}
+export async function respondToQuote(token: string, approve: boolean, name: string, note: string) {
+  return must(await supabase.rpc("respond_to_quote", { p_token: token, p_approve: approve, p_name: name, p_note: note || null })) as string;
+}
+export const quoteUrl = (q: { kind: string; public_token: string }, portalToken?: string | null) =>
+  q.kind === "portal" ? `${window.location.origin}/proposal/${portalToken ?? q.public_token}` : `${window.location.origin}/q/${q.public_token}`;
+
+// The interactive portal: its link, every time it was opened, and what happened in each visit.
+export type ProposalLink = { id: string; token: string; client_name: string; template: string | null; quote_id: string; is_active: boolean; admin_key: string };
+export type ProposalSession = { id: string; link_id: string; started_at: string; last_seen_at: string | null; locale: string | null; user_agent: string | null; completed_at: string | null; recommended_track: string | null };
+export type ProposalEvent = { id: string; session_id: string; type: string; payload: Record<string, unknown> | null; created_at: string };
+export type Proposal = { link: ProposalLink | null; sessions: ProposalSession[]; events: ProposalEvent[] };
+export const useProposal = (quoteId: string | undefined, enabled = true) => useQuery<Proposal>({
+  queryKey: ["proposal", quoteId], enabled: !!quoteId && enabled, refetchInterval: 60_000,
+  queryFn: async () => {
+    const link = must(await supabase.from("proposal_links").select("*").eq("quote_id", quoteId!).maybeSingle()) as ProposalLink | null;
+    if (!link) return { link: null, sessions: [], events: [] };
+    const sessions = must(await supabase.from("proposal_sessions").select("*").eq("link_id", link.id).order("started_at", { ascending: false })) as ProposalSession[];
+    const events = sessions.length
+      ? must(await supabase.from("proposal_events").select("*").in("session_id", sessions.map((x) => x.id)).order("created_at")) as ProposalEvent[]
+      : [];
+    return { link, sessions, events };
+  },
+});
+export const useProposalLinks = () => q<ProposalLink[]>(["proposal_links"], () => supabase.from("proposal_links").select("*"));

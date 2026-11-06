@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  useExpenses, useFinancials, useIncome, usePartners, useProjects, useSave, useSaveShares, usePartnerShares, useShares, useTasks, useTime,
+  useExpenses, useFinancials, useIncome, usePartners, useProjects, useQuotes, useSave, useSaveShares, usePartnerShares, useShares, useTasks, useTime,
 } from "../lib/data";
-import { date, hours, isArchived, money, PROJECT_TAG, TASK_STATUS, today } from "../lib/format";
+import { date, hours, isArchived, money, PROJECT_TAG, QUOTE_STATUS, quoteState, TASK_STATUS, today } from "../lib/format";
+import { Icon } from "../components/icons";
 import { Button, Card, Field, Input, Loading, Modal, Num, Select, Tag, Textarea, useConfirm } from "../components/ui";
 import { StageStepper } from "../components/Stage";
 import { must, supabase } from "../lib/supabase";
@@ -42,7 +43,7 @@ export default function ProjectPage() {
           {p.client_id && p.clients?.name && <Link to={`/clients/${p.client_id}`} className="text-[15px] text-pink hover:text-pink-soft">{p.clients.name}</Link>}
         </div>
         <h1 className="mt-1 text-[clamp(34px,5.2vw,80px)] font-semibold leading-[1.05] tracking-[-0.02em]">{p.name}</h1>
-        <div className="mt-6 max-w-[760px]"><StageCard project={p} /></div>
+        <div className="mt-6 max-w-[760px]"><StageCard project={p} /><Delivery project={p} /></div>
         <div className="mt-5"><AddChips kinds={["expense", "income", "document", "task", "time", "meeting"]} onAdd={add.open} /></div>
       </header>
 
@@ -188,6 +189,30 @@ function SplitCard({ projectId, expected, partners }: { projectId: string; profi
         </div>
       )}
     </Card>
+  );
+}
+
+// "Delivered to the client" is a moment of its own: it stamps the date, and the database moves the project to implementation.
+function Delivery({ project }: { project: Project }) {
+  const save = useSave("projects");
+  const quotes = useQuotes();
+  const confirm = useConfirm();
+  const mine = (quotes.data ?? []).filter((q) => q.project_id === project.id && q.status !== "cancelled");
+  if (isArchived(project.status)) return null;
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-[15px]">
+      {project.delivered_on ? <span className="text-mute">נמסר ללקוח ב-{date(project.delivered_on)}</span> : (
+        <Button variant="ghost" className="!px-4 !py-1.5 text-[14px]" disabled={save.isPending} onClick={async () => {
+          if (await confirm({ title: "המערכת נמסרה ללקוח?", body: "נרשום את תאריך המסירה, והפרויקט יעבור לשלב הטמעה.", yes: "כן, נמסר" }))
+            await save.mutateAsync({ id: project.id, values: { delivered_on: today() } });
+        }}><Icon name="check" size={16} />נמסר ללקוח</Button>
+      )}
+      {mine.map((q) => (
+        <Link key={q.id} to={`/quotes/${q.id}`} className="inline-flex items-center gap-1.5 text-mute hover:text-bone">
+          <Icon name={q.kind === "portal" ? "link" : "quote"} size={15} />הצעה <Num>{q.number}</Num> · {QUOTE_STATUS[quoteState(q)]}
+        </Link>
+      ))}
+    </div>
   );
 }
 

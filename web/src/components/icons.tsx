@@ -38,6 +38,11 @@ const PATHS = {
   moon: "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z",
   device: "M4 5h16v11H4zM9 20h6M12 16v4",
   link: "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
+  leads: "M3 5h18l-7 8v6l-4 2v-8z",
+  send: "M21 3 10 14M21 3l-7 18-4-7-7-4z",
+  quote: "M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6",
+  copy: "M9 9h11v11H9zM5 15H4V4h11v1",
+  eye: "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
 } as const;
 
 export type IconName = keyof typeof PATHS;

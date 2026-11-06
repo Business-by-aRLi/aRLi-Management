@@ -21,3 +21,26 @@ export const PROJECT_STATUS: Record<string, string> = { ...Object.fromEntries(PR
 export const isArchived = (status: string) => status === "archived" || status === "closed" || status === "paused";
 export const stageIndex = (status: string) => isArchived(status) ? 4 : Math.max(0, PROJECT_STAGES.findIndex(([k]) => k === status));
 export const TASK_STATUS: Record<string, string> = { todo: "לביצוע", in_progress: "בעבודה", done: "בוצע" };
+
+// Leads move left to right; "won" and "lost" close them.
+export const LEAD_STAGES = [["new", "חדש"], ["contacted", "בשיחה"], ["meeting", "פגישה"], ["quote_sent", "נשלחה הצעה"], ["won", "נסגר"], ["lost", "לא רלוונטי"]] as const;
+export const LEAD_STAGE: Record<string, string> = Object.fromEntries(LEAD_STAGES);
+export const OPEN_LEAD_STAGES = ["new", "contacted", "meeting", "quote_sent"];
+export const LEAD_SOURCES = ["המלצה", "אתר", "וואטסאפ", "פייסבוק", "אינסטגרם", "נטוורקינג", "לקוח קיים", "אחר"];
+export const ACTIVITY_KIND: Record<string, string> = { note: "הערה", call: "שיחה", whatsapp: "וואטסאפ", email: "מייל", meeting: "פגישה", stage: "שלב", quote: "הצעה" };
+export const QUOTE_STATUS: Record<string, string> = { draft: "טיוטה", sent: "נשלחה", viewed: "נצפתה", approved: "אושרה", rejected: "נדחתה", cancelled: "בוטלה", expired: "פג תוקף" };
+// "Expired" is not stored: a sent quote past its date simply reads as expired.
+export const quoteState = (q: { status: string; valid_until: string }) =>
+  (q.status === "sent" || q.status === "viewed") && q.valid_until < today() ? "expired" : q.status;
+export const addDays = (iso: string, n: number) => { const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+// Days between two YYYY-MM-DD dates (b - a).
+export const daysBetween = (a: string, b: string) => Math.round((new Date(`${b}T12:00:00`).getTime() - new Date(`${a}T12:00:00`).getTime()) / 86_400_000);
+// Quote totals, the same way the database computes them (used for the live preview while editing).
+export function quoteTotals(items: { quantity: number; unit_price: number; recurring: boolean }[], discountType: string, discountValue: number, includeVat: boolean, vatRate: number) {
+  const subtotal = items.filter((i) => !i.recurring).reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.unit_price) || 0), 0);
+  const discount = discountType === "percent" ? subtotal * (Number(discountValue) || 0) / 100 : Number(discountValue) || 0;
+  const net = Math.max(0, subtotal - discount);
+  const vat = includeVat ? net * (Number(vatRate) || 0) / 100 : 0;
+  const monthly = items.filter((i) => i.recurring).reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.unit_price) || 0), 0);
+  return { subtotal, discount, net, vat, total: Math.round((net + vat) * 100) / 100, monthly };
+}
