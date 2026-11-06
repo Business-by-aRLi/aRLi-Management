@@ -5,6 +5,7 @@ import { date, money } from "../lib/format";
 import { Button, Card, Eyebrow, Loading, Modal, Num, useConfirm } from "../components/ui";
 import { ClientForm, clientTotals, ContactLink } from "./Clients";
 import { NewProject, ProjectCard } from "./Projects";
+import { AddChips, SectionAdd, useContextAdd } from "../components/ContextAdd";
 
 export default function ClientPage() {
   const { id } = useParams();
@@ -19,6 +20,13 @@ export default function ClientPage() {
   const remove = useRemove("clients");
   const [adding, setAdding] = useState(false);
   const c = clients.data?.find((x) => x.id === id);
+  // New items open on the client's project when there is exactly one open project; otherwise she picks from theirs.
+  const mine = (projects.data ?? []).filter((p) => p.client_id === id);
+  const open = mine.filter((p) => p.status !== "closed");
+  const add = useContextAdd({
+    projectId: open.length === 1 ? open[0].id : undefined, name: c?.name ?? "",
+    context: { only: mine.map((p) => p.id), clientId: id },
+  });
   if (clients.isLoading || projects.isLoading) return <Loading />;
   if (!c) return <p className="text-mute">הלקוח לא נמצא.</p>;
 
@@ -38,6 +46,7 @@ export default function ClientPage() {
             {c.email && <ContactLink href={`mailto:${c.email}`} icon="mail">{c.email}</ContactLink>}
           </div>
         )}
+        <div className="mt-5"><AddChips kinds={["income", "expense", "task", "meeting", "time"]} onAdd={add.open} /></div>
       </header>
 
       <section className="grid gap-4 sm:grid-cols-3">
@@ -64,7 +73,7 @@ export default function ClientPage() {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
-          <h2 className="mb-3 text-[22px] font-semibold">תשלומים</h2>
+          <div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-[22px] font-semibold">תשלומים</h2><SectionAdd label="תשלום" onClick={() => add.open("income")} /></div>
           {!payments.length && <p className="text-mute">עוד לא התקבלו תשלומים.</p>}
           {payments.map((i) => (
             <div key={i.id} className="row-line flex justify-between gap-3 py-2.5">
@@ -89,6 +98,7 @@ export default function ClientPage() {
       <Modal open={adding} onClose={() => setAdding(false)} title={`פרויקט חדש ל${c.name}`}>
         <NewProject clientId={c.id} onDone={() => setAdding(false)} />
       </Modal>
+      {add.modal}
     </div>
   );
 }

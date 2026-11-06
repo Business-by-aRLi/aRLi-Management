@@ -9,7 +9,8 @@ import {
 import { money, today } from "../lib/format";
 import { Button, Card, Eyebrow, IconButton, Input, Modal, Num, Pill, useConfirm } from "../components/ui";
 import { Icon } from "../components/icons";
-import { PlanForm, SettlementForm, useMe } from "../components/forms";
+import { PlanForm, SettlementForm, TaskForm, useMe } from "../components/forms";
+import { NewProject } from "./Projects";
 import Gantt from "../components/Gantt";
 
 const LINES = [
@@ -101,6 +102,7 @@ function Goals() {
   const plans = useWorkPlans();
   const tasks = useTasks();
   const [modal, setModal] = useState<null | { row?: WorkPlan }>(null);
+  const [taskFor, setTaskFor] = useState<WorkPlan | null>(null);
   const t = today();
   const current = (plans.data ?? []).filter((p) => !p.period_end || p.period_end >= t);
 
@@ -121,7 +123,8 @@ function Goals() {
         const done = linked.filter((x) => x.status === "done").length;
         const pct = linked.length ? Math.round((done / linked.length) * 100) : 0;
         return (
-          <button key={p.id} onClick={() => setModal({ row: p })} className="row-line row-btn block w-[calc(100%+20px)] py-4 text-start">
+          <div key={p.id} className="row-line flex items-center gap-1">
+          <button onClick={() => setModal({ row: p })} className="row-btn block min-w-0 flex-1 py-4 text-start">
             <div className="flex items-baseline justify-between gap-3">
               <span className="text-[18px] font-medium">{p.title}</span>
               <span className="text-[14px] text-mute"><Num>{pct}%</Num></span>
@@ -133,10 +136,15 @@ function Goals() {
               <Num>{done}/{linked.length}</Num> משימות{p.period_end && <> · עד <Num>{new Date(p.period_end).toLocaleDateString("he-IL", { day: "numeric", month: "numeric" })}</Num></>}
             </div>
           </button>
+          <IconButton icon="plus" label={`משימה חדשה ליעד: ${p.title}`} onClick={() => setTaskFor(p)} />
+          </div>
         );
       })}
       <Modal open={!!modal} onClose={() => setModal(null)} title={modal?.row ? "עריכת יעד" : "יעד חדש"}>
         <PlanForm row={modal?.row} onDone={() => setModal(null)} />
+      </Modal>
+      <Modal open={!!taskFor} onClose={() => setTaskFor(null)} title={`משימה ליעד: ${taskFor?.title ?? ""}`}>
+        {taskFor && <TaskForm workPlanId={taskFor.id} startOn={t} onDone={() => setTaskFor(null)} />}
       </Modal>
     </Card>
   );
@@ -150,6 +158,9 @@ function IdeasBoard({ ideas, meId }: { ideas: Idea[]; meId?: string }) {
   const remove = useRemove("ideas");
   const confirm = useConfirm();
   const [title, setTitle] = useState("");
+  const [turn, setTurn] = useState<null | { idea: Idea; into: "task" | "project" }>(null);
+  // Once the idea became a task or a project, it moves to "יוצאות לדרך".
+  const launched = () => { if (turn) save.mutate({ id: turn.idea.id, values: { status: "go" } }); setTurn(null); };
   const visible = ideas.filter((i) => i.status !== "parked").slice(0, 8);
 
   return (
@@ -173,10 +184,16 @@ function IdeasBoard({ ideas, meId }: { ideas: Idea[]; meId?: string }) {
             <button className="press" onClick={() => save.mutate({ id: i.id, values: { status: IDEA_NEXT[i.status] } })} title={`להעביר ל"${IDEA_STATUS[IDEA_NEXT[i.status]]}"`}>
               <Pill tone={i.status === "go" ? "pink" : "mute"}>{IDEA_STATUS[i.status]}</Pill>
             </button>
+            <IconButton icon="tasks" size={32} label="להפוך למשימה" onClick={() => setTurn({ idea: i, into: "task" })} />
+            <IconButton icon="projects" size={32} label="להפוך לפרויקט" onClick={() => setTurn({ idea: i, into: "project" })} />
             <IconButton icon="trash" size={32} label="מחיקת הרעיון" onClick={async () => (await confirm({ title: "למחוק את הרעיון?", body: i.title })) && remove.mutate(i.id)} />
           </span>
         </div>
       ))}
+      <Modal open={!!turn} onClose={() => setTurn(null)} title={turn?.into === "project" ? "מהרעיון לפרויקט" : "מהרעיון למשימה"}>
+        {turn?.into === "task" && <TaskForm title={turn.idea.title} startOn={today()} onDone={launched} onCancel={() => setTurn(null)} />}
+        {turn?.into === "project" && <NewProject name={turn.idea.title} type="business" onDone={launched} onCancel={() => setTurn(null)} />}
+      </Modal>
     </Card>
   );
 }

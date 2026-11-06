@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { deleteReceipt, parseDocument, uploadReceipt, type ParsedDocument } from "../lib/data";
 import { date, money } from "../lib/format";
-import { ExpenseForm, IncomeForm } from "./forms";
+import { ExpenseForm, IncomeForm, type Context } from "./forms";
 import { Segmented } from "./ui";
 
 const MAX_MB = 15;
@@ -14,7 +14,8 @@ type State =
   | { step: "reading"; file: File; url: string }
   | { step: "review"; file: File; url: string; path: string; parsed: ParsedDocument | null; error?: string };
 
-export function DocumentUpload({ onDone }: { onDone: () => void }) {
+// `projectId` comes from the page it was opened on (a project page), and wins over the project the reader guessed.
+export function DocumentUpload({ onDone, projectId, context }: { onDone: () => void; projectId?: string; context?: Context }) {
   const [state, setState] = useState<State>({ step: "pick" });
   const [kind, setKind] = useState<"expense" | "income">("expense");
   const [drag, setDrag] = useState(false);
@@ -96,13 +97,13 @@ export function DocumentUpload({ onDone }: { onDone: () => void }) {
       <Notes state={state} foreign={foreign} />
       <Segmented label="סוג תנועה" value={kind} onChange={setKind} options={[["expense", "הוצאה"], ["income", "הכנסה"]]} />
       {kind === "expense" ? (
-        <ExpenseForm key="expense" receiptPath={state.path} onDone={saved} onCancel={cancel} initial={{
-          amount, description: desc, ...(isDate(p?.date) ? { spent_on: p!.date } : {}), project_id: p?.project_id ?? "",
+        <ExpenseForm key="expense" receiptPath={state.path} onDone={saved} onCancel={cancel} context={context} initial={{
+          amount, description: desc, ...(isDate(p?.date) ? { spent_on: p!.date } : {}), project_id: projectId ?? p?.project_id ?? "",
           category: p?.category ?? "", reference: p?.invoice_number ?? "", notes,
         }} />
       ) : (
-        <IncomeForm key="income" receiptPath={state.path} onDone={saved} onCancel={cancel} initial={{
-          amount, ...(isDate(p?.date) ? { received_on: p!.date } : {}), project_id: p?.project_id ?? "",
+        <IncomeForm key="income" receiptPath={state.path} onDone={saved} onCancel={cancel} context={context} initial={{
+          amount, ...(isDate(p?.date) ? { received_on: p!.date } : {}), project_id: projectId ?? p?.project_id ?? "",
           method: p?.payment_method ?? "", reference: p?.invoice_number ?? "",
           notes: [p?.counterparty && `לקוח: ${p.counterparty}`, notes].filter(Boolean).join(" · "),
         }} />
