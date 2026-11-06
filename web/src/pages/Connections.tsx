@@ -1,14 +1,16 @@
 // Connections to outside providers, like the "connectors" screen of any SaaS. A key is pasted once,
 // stored encrypted in the database (Supabase Vault) and never shown again; the app sees only its status.
-import { useState } from "react";
-import { useConnectorActions, useConnectors, useInfraSync, useProviderResources, type Connector } from "../lib/data";
+import { useRef, useState } from "react";
+import {
+  useConnectorActions, useConnectors, useInfraSync, useInvoiceImports, useProviderResources, useSupabaseInvoiceUpload, type Connector,
+} from "../lib/data";
 import { dateTime } from "../lib/format";
 import { Button, Card, Field, Input, Loading, Modal, PageTitle, Pill, useConfirm } from "../components/ui";
 
 type Info = { name: string; gives: string; keyLabel: string; where: string; url: string; team?: boolean };
 export const CONNECTORS: Record<string, Info> = {
   vercel: {
-    name: "Vercel", gives: "עלות אחסון לכל פרויקט, כל בוקר. בתוכנית Hobby העלות 0.",
+    name: "Vercel", gives: "עלות אחסון לכל פרויקט, כל בוקר, כולל 12 החודשים האחרונים. מנוי Pro עצמו משויך דרך \"עלות התוכנית של הצוות\".",
     keyLabel: "Access Token", where: "Account Settings › Tokens › Create", url: "https://vercel.com/account/settings/tokens", team: true,
   },
   anthropic: {
@@ -20,7 +22,7 @@ export const CONNECTORS: Record<string, Info> = {
     keyLabel: "Admin key", where: "Settings › Organization › Admin keys", url: "https://platform.openai.com/settings/organization/admin-keys",
   },
   supabase: {
-    name: "Supabase", gives: "נתוני שימוש לכל פרויקט (בקשות API). Supabase לא חושפת עלות לפי פרויקט, אז המחיר נרשם ידנית.",
+    name: "Supabase", gives: "נתוני שימוש לכל פרויקט (בקשות API). העלות לפי פרויקט נקראת מהחשבונית החודשית.",
     keyLabel: "Personal Access Token", where: "Account › Access Tokens › Generate", url: "https://supabase.com/dashboard/account/tokens",
   },
 };
@@ -35,7 +37,7 @@ export default function Connections() {
   return (
     <div className="space-y-8">
       <PageTitle eyebrow="הגדרות" title="חיבורים"
-        action={byProvider.size > 0 && <Button variant="ghost" disabled={sync.isPending} onClick={() => sync.mutate()}>{sync.isPending ? "מסנכרנת…" : "סנכרון עלויות עכשיו"}</Button>} />
+        action={byProvider.size > 0 && <Button variant="ghost" disabled={sync.isPending} onClick={() => sync.mutate({ gmail: true, full: true })}>{sync.isPending ? "מסנכרנת…" : "סנכרון כל ההיסטוריה"}</Button>} />
       <p className="max-w-[640px] text-mute">
         מחברים ספק פעם אחת, ומעכשיו העלויות שלו נמשכות כל בוקר לכרטיס "תשתיות" בכל פרויקט. המפתח נשמר מוצפן ולא מוצג שוב.
       </p>
@@ -47,7 +49,9 @@ export default function Connections() {
 
       <div className="grid gap-5 md:grid-cols-2">
         {Object.entries(CONNECTORS).map(([id, info]) => (
-          <ConnectorCard key={id} id={id} info={info} conn={byProvider.get(id)} onConnect={() => setOpen(id)} />
+          <ConnectorCard key={id} id={id} info={info} conn={byProvider.get(id)} onConnect={() => setOpen(id)}>
+            {id === "supabase" && <SupabaseInvoices />}
+          </ConnectorCard>
         ))}
         <Card>
           <div className="flex items-center justify-between gap-3">
@@ -65,7 +69,7 @@ export default function Connections() {
   );
 }
 
-function ConnectorCard({ id, info, conn, onConnect }: { id: string; info: Info; conn?: Connector; onConnect: () => void }) {
+function ConnectorCard({ id, info, conn, onConnect, children }: { id: string; info: Info; conn?: Connector; onConnect: () => void; children?: React.ReactNode }) {
   const { remove } = useConnectorActions();
   const confirm = useConfirm();
   const [testing, setTesting] = useState(false);
@@ -99,7 +103,45 @@ function ConnectorCard({ id, info, conn, onConnect }: { id: string; info: Info; 
           }}>ניתוק</button>
         )}
       </div>
+      {children}
     </Card>
+  );
+}
+
+// Supabase bills per organization but lists each project on the invoice: read from Gmail daily, or uploaded here.
+function SupabaseInvoices() {
+  const upload = useSupabaseInvoiceUpload();
+  const imports = useInvoiceImports();
+  const input = useRef<HTMLInputElement>(null);
+  const last = upload.data;
+  const mm = (m?: string | null) => (m ? `${m.slice(5, 7)}/${m.slice(0, 4)}` : "");
+  return (
+    <div className="mt-5 border-t border-[var(--line)] pt-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-[17px] font-semibold">חשבונית חודשית</h3>
+        <Button variant="ghost" disabled={upload.isPending} onClick={() => input.current?.click()}>{upload.isPending ? "קוראת…" : "העלאת חשבונית"}</Button>
+        <input ref={input} type="file" accept="application/pdf,image/*" className="hidden"
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) upload.mutate(f); e.target.value = ""; }} />
+      </div>
+      <p className="mt-1 text-[14px] text-mute">כל בוקר נבדק ה־Gmail המחובר לחשבוניות Supabase חדשות. אפשר גם להעלות PDF מ־Billing › Invoices.</p>
+      {upload.error && <p className="mt-2 text-[14px] text-error">{(upload.error as Error).message}</p>}
+      {last && (
+        <p className="mt-2 text-[14px]">חשבונית {mm(last.month)}: נרשמה עלות ל־{last.matched} שירותים.
+          {!!last.unmatched.length && <span className="block text-mute">לא שויכו: {last.unmatched.map((u) => `${u.name} ($${u.amount})`).join(", ")}. מוסיפים שירות Supabase לפרויקט המתאים ומעלים שוב.</span>}
+        </p>
+      )}
+      {!!imports.data?.length && (
+        <div className="mt-3 space-y-1 text-[13px] text-mute">
+          {imports.data.map((i) => (
+            <div key={i.source_key}>
+              {mm(i.month)} · {i.source_key.startsWith("gmail:") ? "מ־Gmail" : "הועלתה"}
+              {i.total != null && <> · <bdi>${Number(i.total)}</bdi></>}
+              {" "}· {i.result?.matched ?? 0} שויכו{i.result?.unmatched?.length ? `, ${i.result.unmatched.length} לא שויכו` : ""}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

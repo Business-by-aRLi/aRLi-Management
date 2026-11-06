@@ -138,8 +138,10 @@ export const useInfraSyncLast = () => q<InfraSyncLast>(["infra", "last"], () => 
 export function useInfraSync() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async () => {
-      const { data, error } = await supabase.functions.invoke("infra-sync", { body: {} });
+    // gmail: also look for new Supabase invoices in the connected mailboxes (the daily run always does).
+    // full: go back 12 months (history) instead of the last two.
+    mutationFn: async (opts?: { gmail?: boolean; full?: boolean }) => {
+      const { data, error } = await supabase.functions.invoke("infra-sync", { body: { gmail: !!opts?.gmail, full: !!opts?.full } });
       if (error) throw new Error(error.message);
       return data as { ok: boolean; report: Record<string, string>; errors: string[] };
     },
@@ -168,6 +170,28 @@ export function useProviderResources(provider: string, enabled: boolean) {
       if (!data?.ok) throw new Error(data?.error ?? "החיבור נכשל");
       return data.resources as ProviderResource[];
     },
+  });
+}
+
+export type InvoiceImport = { source_key: string; month: string | null; total: number | null; currency: string | null; imported_at: string;
+  result: { matched?: number; unmatched?: { name: string; amount: number }[]; skipped?: string } | null };
+export const useInvoiceImports = () => q<InvoiceImport[]>(["infra", "invoices"], () =>
+  supabase.from("infra_invoice_imports").select("*").not("month", "is", null).order("imported_at", { ascending: false }).limit(5));
+
+// Uploads a Supabase invoice and has the sync function file each project's amount.
+export function useSupabaseInvoiceUpload() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const safe = file.name.replace(/[^\w.\-]+/g, "_").slice(-80) || "invoice.pdf";
+      const path = `infra/supabase/${Date.now()}-${safe}`;
+      must(await supabase.storage.from("receipts").upload(path, file, { contentType: file.type }));
+      const { data, error } = await supabase.functions.invoke("infra-sync", { body: { action: "supabase_invoice", path } });
+      if (error) throw new Error(error.message);
+      if (!data?.ok) throw new Error(data?.error ?? "קריאת החשבונית נכשלה");
+      return data as { month: string; matched: number; unmatched: { name: string; amount: number }[] };
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["infra"] }),
   });
 }
 
