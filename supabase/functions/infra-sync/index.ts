@@ -291,7 +291,7 @@ async function parseInvoice(bytes: Uint8Array, mime: string): Promise<Parsed> {
   const res = await gemini({
     contents: [{ role: "user", parts: [
       { inlineData: { mimeType: mime, data: b64(bytes) } },
-      { text: "This should be a Supabase invoice. Extract the billing month and the amount per project, plus organization-level charges." },
+      { text: "This should be a Supabase invoice. Extract the billing month and the amount per project, plus organization-level charges. For each project also list its line items (compute hours, disk, egress...) with quantity and unit where the invoice shows them." },
     ] }],
     generationConfig: { responseMimeType: "application/json", responseSchema: invoiceSchema },
   });
@@ -299,8 +299,10 @@ async function parseInvoice(bytes: Uint8Array, mime: string): Promise<Parsed> {
 }
 
 type Line = { name: string; ref: string; amount: number; items?: Item[] };
-// Invoices read before line items were kept (result.v < 2) are read again once.
-const INVOICE_VERSION = 2;
+// Raise to read stored invoices again (an invoice whose result.v is lower is read once more).
+// Re-reading for line items was tried (v2): each read took about a minute and the model returned
+// the project totals without items, so stored invoices are not read again.
+const INVOICE_VERSION = 1;
 
 // Files an invoice's amounts on the Supabase services they belong to (by ref, else by project name).
 async function applyInvoice(sourceKey: string, parsed: Parsed) {
@@ -392,12 +394,12 @@ async function gmailInvoices(full: boolean) {
       const { data: seen } = await db.from("infra_invoice_imports").select("source_key,month,result").in("source_key", ids.map((i) => `gmail:${i}`));
       // Skipped mails stay skipped; invoices read before line items were kept are read again.
       const done = new Set((seen ?? []).filter((r) => !r.month || (r.result?.v ?? 1) >= INVOICE_VERSION).map((r) => r.source_key));
-      // Each invoice takes a model call of 20-40 seconds and the function is stopped after 150, so a run
-      // reads at most 3 and starts none after 80 seconds; the next run continues.
+      // Each invoice takes a model call of 30-70 seconds and the function is stopped after 150, so a run
+      // reads at most 3 and starts none after 40 seconds; the next run continues.
       let budget = 3;
       for (const id of ids) {
         if (done.has(`gmail:${id}`)) continue;
-        if (budget-- <= 0 || Date.now() - started > 80_000) { report.push("ממשיך בסנכרון הבא"); break; }
+        if (budget-- <= 0 || Date.now() - started > 40_000) { report.push("ממשיך בסנכרון הבא"); break; }
         const m = await g(`messages/${id}`, { format: "full" });
         // deno-lint-ignore no-explicit-any
         const pdfs: any[] = [];
@@ -409,7 +411,10 @@ async function gmailInvoices(full: boolean) {
         if (!pdf) continue;
         const data = pdf.body?.data ?? (await g(`messages/${id}/attachments/${pdf.body.attachmentId}`)).data;
         try {
-          const r = await applyInvoice(`gmail:${id}`, await parseInvoice(fromB64Url(data), "application/pdf"));
+          console.log(`invoice ${id}: reading (${Math.round((Date.now() - started) / 1000)}s, ${data.length} b64 chars)`);
+          const parsed = await parseInvoice(fromB64Url(data), "application/pdf");
+          console.log(`invoice ${id}: parsed ${parsed.period_month} (${Math.round((Date.now() - started) / 1000)}s)`);
+          const r = await applyInvoice(`gmail:${id}`, parsed);
           report.push(`חשבונית ${r.month.slice(0, 7)}: ${r.matched} שירותים`);
         } catch (e) {
           const msg = (e as Error).message;
