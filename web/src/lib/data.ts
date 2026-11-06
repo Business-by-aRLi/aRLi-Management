@@ -50,7 +50,7 @@ export const usePartners = () => q<Partner[]>(["partners"], () => supabase.from(
 export const useProjects = () => q<Project[]>(["projects"], () => supabase.from("projects").select("*,clients(name)").order("name"));
 export const useClients = () => q<Client[]>(["clients"], () => supabase.from("clients").select("*").order("name"));
 export const useFinancials = () => q<Financials[]>(["financials"], () => supabase.from("project_financials").select("*"));
-export type PartnerSummary = { partner_id: string; name: string; invested: number; profit_share: number; due: number; received: number; balance: number; expected_profit_share: number };
+export type PartnerSummary = { partner_id: string; name: string; invested: number; profit_share: number; due: number; received: number; balance: number; expected_profit_share: number; received_from_clients: number; transfers_net: number };
 export type BusinessSummary = { income: number; project_expenses: number; general_expenses: number; profit: number; agreed_total: number; outstanding: number; expected_profit: number };
 export const usePartnerSummary = () => q<PartnerSummary[]>(["balances", "partners"], () => supabase.from("partner_summary").select("*"));
 export const useBusinessSummary = () => q<BusinessSummary>(["balances", "business"], () => supabase.from("business_summary").select("*").single());

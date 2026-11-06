@@ -211,44 +211,61 @@ export function BalanceModule() {
         <h2 className="text-[24px] font-semibold">התחשבנות</h2>
         <Link to="/money" className="text-[15px] text-pink hover:text-pink-soft">לכספים ←</Link>
       </div>
-      <div className="mb-4" />
+      <p className="mb-5 text-[14px] text-mute">שני דברים נפרדים: כמה העסק הרוויח ואיך הרווח מתחלק, ואיך הכסף זז בפועל.</p>
 
-      {biz && (
-        <div className="mb-5 rounded-2xl bg-[var(--ink-3)]/60 px-4 py-3">
-          <div className="flex items-baseline justify-between"><span className="font-medium">העסק</span>
-            <span className="text-[13px] text-mute">רווח כולל</span></div>
-          <div className={`mt-1 text-[28px] font-semibold ${biz.profit < 0 ? "text-error" : ""}`}><Num>{money(biz.profit)}</Num></div>
-          <p className="mt-1 text-[13px] text-mute">
-            הכנסות <Num>{money(biz.income)}</Num> · הוצאות פרויקטים <Num>{money(biz.project_expenses)}</Num> · השקעות כלליות <Num>{money(biz.general_expenses)}</Num>
-          </p>
-          {biz.outstanding > 0.005 && (
-            <div className="mt-3 flex flex-wrap items-baseline justify-between gap-2 border-t border-[var(--line)] pt-3 text-[14px]">
-              <span className="text-mute">רווח צפוי, כשכל התמורה תתקבל</span>
-              <span><Num className="font-semibold">{money(biz.expected_profit)}</Num>
-                <span className="text-mute"> · פער: עוד <Num>{money(biz.outstanding)}</Num> מלקוחות</span></span>
+      {/* 1. Profit & loss: what the business earned, and each partner's part of it */}
+      <section className="mb-6">
+        <h3 className="mb-2 text-[17px] font-semibold">רווח והפסד</h3>
+        {biz && (
+          <div className="rounded-2xl bg-[var(--ink-3)]/60 px-4 py-3 text-[14px]">
+            <Line label="הכנסות מלקוחות" value={biz.income} />
+            <Line label="הוצאות פרויקטים" value={-biz.project_expenses} />
+            <Line label="הוצאות כלליות של העסק" value={-biz.general_expenses} />
+            <div className="mt-1 flex justify-between border-t border-[var(--line)] pt-2 text-[16px]">
+              <span className="font-medium">רווח העסק</span>
+              <Num className={`font-semibold ${biz.profit < 0 ? "text-error" : ""}`}>{money(biz.profit)}</Num>
             </div>
-          )}
-        </div>
-      )}
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        {rows.map((r) => (
-          <div key={r.partner_id} className="rounded-2xl border border-[var(--line)] px-4 py-3 text-[14px]">
-            <p className="mb-2 text-[16px] font-medium">{r.name}</p>
-            <Line label="השקיעה" value={r.invested} />
-            <Line label="חלקה ברווח" value={r.profit_share} />
-            {biz && biz.outstanding > 0.005 && <Line label="חלקה ברווח הצפוי" value={r.expected_profit_share} />}
-            <Line label="קיבלה" value={r.received} />
-            <div className="mt-2 flex justify-between border-t border-[var(--line)] pt-2">
-              <span className="text-mute">סה״כ יתרה</span>
-              <Num className="font-medium">{money(Math.abs(r.balance) < 0.005 ? 0 : r.balance)}</Num>
-            </div>
+            {biz.outstanding > 0.005 && (
+              <div className="mt-1 flex flex-wrap justify-between gap-2 text-mute">
+                <span>רווח צפוי, כשיגיעו עוד <Num>{money(biz.outstanding)}</Num> מלקוחות</span>
+                <Num>{money(biz.expected_profit)}</Num>
+              </div>
+            )}
           </div>
-        ))}
-      </div>
+        )}
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          {rows.map((r) => (
+            <div key={r.partner_id} className="rounded-2xl border border-[var(--line)] px-4 py-3 text-[14px]">
+              <p className="mb-1 text-[15px] font-medium">{r.name}</p>
+              <Line label="חלקה ברווח" value={r.profit_share} />
+              {biz && biz.outstanding > 0.005 && <Line label="חלקה ברווח הצפוי" value={r.expected_profit_share} />}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* 2. Cash flow: who paid from her pocket, who got money in, transfers between the partners */}
+      <section>
+        <h3 className="mb-2 text-[17px] font-semibold">תזרים</h3>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {rows.map((r) => (
+            <div key={r.partner_id} className="rounded-2xl border border-[var(--line)] px-4 py-3 text-[14px]">
+              <p className="mb-1 text-[15px] font-medium">{r.name}</p>
+              <Line label="שילמה מכיסה הוצאות" value={r.invested} />
+              <Line label="קיבלה מלקוחות" value={r.received_from_clients} />
+              <Line label="העברות בין השותפות" value={r.transfers_net} />
+              <div className="mt-2 flex justify-between border-t border-[var(--line)] pt-2">
+                <span className="text-mute">סה״כ יתרה</span>
+                <Num className="font-medium">{money(Math.abs(r.balance) < 0.005 ? 0 : r.balance)}</Num>
+              </div>
+            </div>
+          ))}
+        </div>
+        <p className="mt-2 text-[13px] text-mute-2">סה״כ יתרה = חלקה ברווח + מה ששילמה מכיסה − מה שקיבלה (מלקוחות ובהעברות). חיובי: עוד מגיע לה.</p>
+      </section>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-[13px] text-mute-2">
-        <span>הוצאות כלליות נחשבות השקעה בעסק ומתחלקות חצי-חצי. רווח מפרויקט מתחלק לפי החלוקה שלו.</span>
+        <span>רווח מפרויקט מתחלק לפי החלוקה שלו. הוצאות כלליות מתחלקות חצי-חצי.</span>
         {gets && gives && <Button variant="ghost" className="!py-1.5 text-[14px]" onClick={() => setSettle(true)}>רישום העברה</Button>}
       </div>
       <Modal open={settle} onClose={() => setSettle(false)} title="רישום העברה בין השותפות">
