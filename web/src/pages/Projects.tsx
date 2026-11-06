@@ -64,7 +64,7 @@ export default function Projects() {
 function TagChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button type="button" aria-pressed={active} onClick={onClick}
-      className={`press inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[15px] font-medium transition-colors duration-300 ${active ? "bg-pink/15 text-pink-soft shadow-[inset_0_0_0_1px_rgba(226,60,126,.35)]" : "text-mute shadow-[inset_0_0_0_1px_var(--line)] hover:text-bone"}`}>
+      className={`press inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[15px] font-medium transition-colors duration-300 ${active ? "bg-pink/15 text-pink-soft shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--pink)_35%,transparent)]" : "text-mute shadow-[inset_0_0_0_1px_var(--line)] hover:text-bone"}`}>
       {children}
     </button>
   );

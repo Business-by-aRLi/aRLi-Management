@@ -2,6 +2,8 @@
 // two-way with Google Calendar ("aRLi"). Events have a kind (meeting / work block / not available) and the
 // people taking part. Google busy times of each partner show as faint blocks, tasks can be dragged into
 // time, and "find a time" suggests slots when both of us are free.
+// Navigation: arrows, the keyboard (← next, → previous, as time runs right to left in Hebrew; T today; D/W/M/L views),
+// a finger swipe on phones and a two-finger swipe on trackpads. A swipe to the right brings the next period in from the left.
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -18,7 +20,7 @@ const HOUR_PX = 52;
 const FIRST_H = 7;
 const LAST_H = 22;
 
-type View = "week" | "month" | "agenda";
+type View = "day" | "week" | "month" | "agenda";
 type Layer = "all" | "mine" | "other";
 type Draft = { row?: Meeting; startsAt?: string; endsAt?: string; kind?: MeetingKind; taskId?: string; title?: string; projectId?: string; partnerIds?: string[] };
 
@@ -31,10 +33,103 @@ const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.get
 const endOf = (m: Meeting) => m.ends_at ?? new Date(new Date(m.starts_at).getTime() + 3600e3).toISOString();
 
 const KIND: Record<MeetingKind, { label: string; icon: IconName; cls: string }> = {
-  meeting: { label: "פגישה", icon: "meeting", cls: "bg-pink text-ink" },
+  meeting: { label: "פגישה", icon: "meeting", cls: "bg-pink text-on-pink" },
   focus: { label: "בלוק עבודה", icon: "focus", cls: "bg-[var(--ink-3)] text-bone shadow-[inset_-3px_0_0_var(--pink-soft),inset_0_0_0_1px_var(--line-2)]" },
   away: { label: "לא זמינה", icon: "away", cls: "text-mute shadow-[inset_0_0_0_1px_var(--line-2)] bg-[repeating-linear-gradient(135deg,var(--ink-3)_0_6px,var(--ink-2)_6px_12px)]" },
 };
+
+const STEP: Record<View, number> = { day: 1, week: 7, month: 0, agenda: 14 };
+
+// Horizontal swipe to move between periods. The content follows the finger; past the threshold it commits.
+// RTL: the next period lies to the left, so a finger moving right pulls it in. Touches that start on an event
+// (which has its own drag) or at the very screen edge (the system back gesture) are left alone.
+function useSwipe(onShift: (n: number) => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [dx, setDx] = useState(0);
+  const cb = useRef(onShift);
+  cb.current = onShift;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let sx = 0, sy = 0, t0 = 0, active = false, axis: "" | "x" | "y" = "";
+    const start = (e: TouchEvent) => {
+      const t = e.touches[0];
+      active = e.touches.length === 1 && !(e.target as HTMLElement).closest("[data-noswipe]") && t.clientX > 20 && t.clientX < window.innerWidth - 20;
+      if (!active) return;
+      sx = t.clientX; sy = t.clientY; t0 = Date.now(); axis = "";
+    };
+    const move = (e: TouchEvent) => {
+      if (!active) return;
+      const x = e.touches[0].clientX - sx, y = e.touches[0].clientY - sy;
+      if (!axis) { if (Math.abs(x) < 10 && Math.abs(y) < 10) return; axis = Math.abs(x) > Math.abs(y) * 1.3 ? "x" : "y"; }
+      if (axis === "x") setDx(x);
+    };
+    const end = (e: TouchEvent) => {
+      if (!active) return;
+      active = false;
+      setDx(0);
+      if (axis !== "x") return;
+      const x = e.changedTouches[0].clientX - sx;
+      const fast = Math.abs(x) / Math.max(1, Date.now() - t0) > 0.45;
+      if (Math.abs(x) > 72 || (Math.abs(x) > 32 && fast)) { navigator.vibrate?.(8); cb.current(x > 0 ? 1 : -1); }
+    };
+    const cancel = () => { active = false; setDx(0); };
+    // Trackpad two-finger swipe (horizontal wheel). Natural scrolling: fingers to the right give deltaX < 0.
+    let acc = 0, lock = 0;
+    const wheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaX) < Math.abs(e.deltaY) * 2) { acc = 0; return; }
+      e.preventDefault();
+      if (Date.now() < lock) return;
+      acc += e.deltaX;
+      if (Math.abs(acc) > 90) { cb.current(acc < 0 ? 1 : -1); acc = 0; lock = Date.now() + 650; }
+    };
+    el.addEventListener("touchstart", start, { passive: true });
+    el.addEventListener("touchmove", move, { passive: true });
+    el.addEventListener("touchend", end);
+    el.addEventListener("touchcancel", cancel);
+    el.addEventListener("wheel", wheel, { passive: false });
+    return () => {
+      el.removeEventListener("touchstart", start); el.removeEventListener("touchmove", move);
+      el.removeEventListener("touchend", end); el.removeEventListener("touchcancel", cancel); el.removeEventListener("wheel", wheel);
+    };
+  }, []);
+  return { ref, dx };
+}
+
+// The label of where a swipe leads, at the edge the new period comes from.
+function SwipePeek({ dx, label }: { dx: number; label: string }) {
+  if (Math.abs(dx) < 16) return null;
+  const ready = Math.abs(dx) > 72;
+  return (
+    <div aria-hidden className="pointer-events-none absolute top-3 z-30 flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[14px] font-semibold transition-colors duration-200"
+      style={{ [dx > 0 ? "left" : "right"]: 8, opacity: Math.min(1, Math.abs(dx) / 72),
+        background: ready ? "var(--pink)" : "var(--ink-3)", color: ready ? "var(--on-pink)" : "var(--bone)", boxShadow: "inset 0 0 0 1px var(--line-2), var(--lift-shadow)" }}>
+      <Icon name={dx > 0 ? "chevronNext" : "chevronPrev"} size={16} />{label}
+    </div>
+  );
+}
+
+const Kbd = ({ children }: { children: React.ReactNode }) => (
+  <kbd className="mx-0.5 inline-grid min-w-6 place-items-center rounded-[6px] px-1.5 font-sans text-[12px] text-bone shadow-[inset_0_0_0_1px_var(--line-2),inset_0_-1px_0_var(--line-2)]">{children}</kbd>
+);
+
+// One line of momentum above the calendar: what is built into this period, and one invitation when it is empty.
+function Momentum({ period, focusH, meetings, due, onBlock }: { period: string; focusH: number; meetings: number; due: number; onBlock: () => void }) {
+  const chip = "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] shadow-[inset_0_0_0_1px_var(--line)] sm:gap-2 sm:px-3.5 sm:py-1.5 sm:text-[14px]";
+  return (
+    <div className="flex flex-wrap items-center gap-2" aria-label={`${period} ביומן`}>
+      <span className="text-[14px] font-medium text-mute">{period}:</span>
+      <span className={chip}><Icon name="focus" size={15} className="text-pink-soft" /><Num>{focusH}</Num> שעות עבודה ממוקדת</span>
+      <span className={chip}><Icon name="meeting" size={15} className="text-pink-soft" /><Num>{meetings}</Num> פגישות</span>
+      {due > 0 && <span className={chip}><Icon name="flag" size={15} className="text-pink-soft" /><Num>{due}</Num> דדליינים</span>}
+      {focusH === 0 && (
+        <button type="button" onClick={onBlock} className="press inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[14px] font-medium text-pink-soft hover:bg-pink/10">
+          <Icon name="plus" size={15} />לחסום זמן לבנייה
+        </button>
+      )}
+    </div>
+  );
+}
 
 const store = {
   get: (k: string) => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -44,17 +139,22 @@ const store = {
 export default function CalendarPage() {
   const me = useMe();
   const partners = usePartners();
-  const [view, setViewState] = useState<View>(() => (store.get("cal-view") as View) ?? (window.innerWidth < 640 ? "agenda" : "week"));
-  const setView = (v: View) => { setViewState(v); store.set("cal-view", v); };
+  const [view, setViewState] = useState<View>(() => (store.get("cal-view") as View) ?? (window.innerWidth < 640 ? "day" : "week"));
+  const setView = (v: View) => { setViewState(v); store.set("cal-view", v); setSlide(null); };
+  // Which way the content enters after a move, and a key that replays the entrance.
+  const [slide, setSlide] = useState<null | "next" | "prev">(null);
+  const [navKey, setNavKey] = useState(0);
   const [anchor, setAnchor] = useState(() => dayStart(new Date()));
   const [layer, setLayer] = useState<Layer>("all");
   const [showBusy, setShowBusy] = useState(true);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [open, setOpen] = useState<Meeting | null>(null);
   const [finder, setFinder] = useState(false);
+  const [filters, setFilters] = useState(false);
 
   // The visible range of each view.
   const range = useMemo(() => {
+    if (view === "day") return { from: anchor, days: 1 };
     if (view === "week") { const s = addDays(anchor, -anchor.getDay()); return { from: s, days: 7 }; }
     if (view === "month") { const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1); return { from: addDays(first, -first.getDay()), days: 42 }; }
     return { from: anchor, days: 14 };
@@ -73,13 +173,55 @@ export default function CalendarPage() {
   const deadlines = (tasks.data ?? []).filter((t) => t.due_on && t.status !== "done" && inLayer(t.assignee_partner_id ? [t.assignee_partner_id] : []));
   const ritualDays = (rituals.data ?? []).filter((r) => r.active && r.next_on).map((r) => ({ id: r.id, title: r.title, on: r.next_on! }));
 
-  const shift = (n: number) => {
-    if (view === "month") setAnchor(new Date(anchor.getFullYear(), anchor.getMonth() + n, 1));
-    else setAnchor(addDays(anchor, n * (view === "week" ? 7 : 14)));
+  const target = (n: number) => view === "month" ? new Date(anchor.getFullYear(), anchor.getMonth() + n, 1) : addDays(anchor, n * STEP[view]);
+  const go = (to: Date, dir: "next" | "prev" | null) => { setSlide(dir); setNavKey((k) => k + 1); setAnchor(to); };
+  const shift = (n: number) => go(target(n), n > 0 ? "next" : "prev");
+  const goToday = () => { const t = dayStart(new Date()); go(t, t > anchor ? "next" : t < anchor ? "prev" : null); };
+  // What a swipe would land on, shown at the edge while the finger moves.
+  const peek = (n: number) => {
+    const t = target(n);
+    if (view === "day") return t.toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" });
+    if (view === "month") return t.toLocaleDateString("he-IL", { month: "long" });
+    return n > 0 ? (view === "week" ? "השבוע הבא" : "השבועיים הבאים") : (view === "week" ? "השבוע הקודם" : "השבועיים הקודמים");
   };
   const title = view === "month"
     ? anchor.toLocaleDateString("he-IL", { month: "long", year: "numeric" })
-    : `${range.from.toLocaleDateString("he-IL", { day: "numeric", month: "long" })} – ${addDays(range.from, range.days - 1).toLocaleDateString("he-IL", { day: "numeric", month: "long" })}`;
+    : view === "day"
+      ? anchor.toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" })
+      : `${range.from.toLocaleDateString("he-IL", { day: "numeric", month: "long" })} – ${addDays(range.from, range.days - 1).toLocaleDateString("he-IL", { day: "numeric", month: "long" })}`;
+  const isToday = view === "day" && ymd(anchor) === ymd(new Date());
+
+  const swipe = useSwipe(shift);
+  // Keyboard: arrows move (RTL), T is today, D/W/M/L switch views. Not while typing or while a dialog is open.
+  const keys = useRef({ shift, goToday, setView });
+  keys.current = { shift, goToday, setView };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || document.querySelector("[role=dialog]")) return;
+      const t = e.target as HTMLElement;
+      if (t.closest("input, textarea, select, [contenteditable=true]")) return;
+      const k = keys.current;
+      const code = e.code;
+      if (e.key === "ArrowLeft") k.shift(1);
+      else if (e.key === "ArrowRight") k.shift(-1);
+      else if (code === "KeyT") k.goToday();
+      else if (code === "KeyD") k.setView("day");
+      else if (code === "KeyW") k.setView("week");
+      else if (code === "KeyM") k.setView("month");
+      else if (code === "KeyL") k.setView("agenda");
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // The period at a glance: framed as momentum, not as load.
+  const inRange = events.filter((m) => { const t = new Date(m.starts_at).getTime(); return t >= range.from.getTime() && t < new Date(toIso).getTime(); });
+  const focusH = Math.round(inRange.filter((m) => m.kind === "focus" && !m.all_day).reduce((a, m) => a + (new Date(endOf(m)).getTime() - new Date(m.starts_at).getTime()), 0) / 3600e3 * 10) / 10;
+  const meetN = inRange.filter((m) => m.kind === "meeting").length;
+  const dueN = deadlines.filter((t) => t.due_on! >= ymd(range.from) && t.due_on! < ymd(new Date(toIso))).length;
+  const period = { day: isToday ? "היום" : "ביום הזה", week: "בשבוע הזה", month: "בחודש הזה", agenda: "בשבועיים האלה" }[view];
 
   const save = useSave("meetings");
   const move = (m: Meeting, start: Date) => {
@@ -95,20 +237,33 @@ export default function CalendarPage() {
   });
 
   return (
-    <div className="space-y-6">
-      <PageTitle eyebrow="יומן משותף" title={title} action={
+    <div className="space-y-4 sm:space-y-6">
+      <PageTitle eyebrow="יומן משותף" title={<span aria-live="polite">{title}</span>} action={
         <div className="flex flex-wrap items-center gap-2">
-          <IconButton icon="chevronPrev" tone="ghost" size={44} label="הקודם" onClick={() => shift(-1)} />
-          <Button variant="ghost" className="!py-2 text-[15px]" onClick={() => setAnchor(dayStart(new Date()))}>היום</Button>
-          <IconButton icon="chevronNext" tone="ghost" size={44} label="הבא" onClick={() => shift(1)} />
-          <Button variant="ghost" className="!py-2 text-[15px]" onClick={() => setFinder(true)}><Icon name="search" size={16} />מצאי זמן פנוי</Button>
-          <Button arrow className="group" onClick={() => setDraft({ startsAt: `${ymd(anchor.getTime() < Date.now() ? new Date() : anchor)}T09:00` })}>אירוע חדש</Button>
+          <div role="group" aria-label="מעבר בין תאריכים" className="inline-flex items-center rounded-full p-0.5 shadow-[inset_0_0_0_1px_var(--line-2)]">
+            <IconButton icon="chevronPrev" size={44} label={`הקודם (${peek(-1)})`} onClick={() => shift(-1)} />
+            <button type="button" onClick={goToday} aria-label="חזרה להיום"
+              className="press h-11 rounded-full px-4 text-[15px] font-semibold text-bone transition-colors duration-300 hover:bg-[var(--hover-veil)]">היום</button>
+            <IconButton icon="chevronNext" size={44} label={`הבא (${peek(1)})`} onClick={() => shift(1)} />
+          </div>
+          <Button variant="ghost" className="!hidden !py-2 text-[15px] sm:!inline-flex" onClick={() => setFinder(true)}><Icon name="search" size={16} />מצאי זמן פנוי</Button>
+          <Button arrow className="group !hidden sm:!inline-flex" onClick={() => setDraft({ startsAt: `${ymd(anchor.getTime() < Date.now() ? new Date() : anchor)}T09:00` })}>אירוע חדש</Button>
+          {/* Phone: the same two actions as round buttons, so the calendar itself starts higher on the screen */}
+          <IconButton className="sm:!hidden" icon="search" tone="ghost" size={44} label="מצאי זמן פנוי" onClick={() => setFinder(true)} />
+          <IconButton className="sm:!hidden" icon="plus" tone="pink" size={44} label="אירוע חדש" onClick={() => setDraft({ startsAt: `${ymd(anchor.getTime() < Date.now() ? new Date() : anchor)}T09:00` })} />
         </div>
       } />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Segmented label="תצוגה" value={view} onChange={setView} options={[["week", "שבוע"], ["month", "חודש"], ["agenda", "רשימה"]]} />
+          <Segmented label="תצוגה" value={view} onChange={setView} options={[["day", "יום"], ["week", "שבוע"], ["month", "חודש"], ["agenda", "רשימה"]]} />
+          <button type="button" onClick={() => setFilters(!filters)} aria-expanded={filters} aria-controls="cal-filters"
+            className="press inline-flex h-10 items-center gap-1 rounded-full px-3 text-[14px] font-medium text-mute shadow-[inset_0_0_0_1px_var(--line)] hover:text-bone sm:hidden">
+            סינון<Icon name="chevronDown" size={16} className={`transition-transform duration-300 ${filters ? "rotate-180" : ""}`} />
+          </button>
+        </div>
+        <div id="cal-filters" className={`${filters ? "flex" : "hidden"} w-full flex-wrap items-center justify-between gap-3 sm:flex sm:w-auto sm:flex-1`}>
+        <div className="flex flex-wrap items-center gap-2">
           <Segmented label="של מי" value={layer} onChange={setLayer} options={[["all", "שתינו"], ["mine", "שלי"], ["other", other ? `של ${other.name}` : "שלה"]]} />
           <label className="flex items-center gap-2 px-2 text-[14px] text-mute">
             <input type="checkbox" checked={showBusy} onChange={(e) => setShowBusy(e.target.checked)} className="size-4 accent-[var(--pink)]" />
@@ -116,13 +271,18 @@ export default function CalendarPage() {
           </label>
         </div>
         <SyncBar partners={partners.data ?? []} />
+        </div>
       </div>
 
-      <Legend />
+      <Momentum period={period} focusH={focusH} meetings={meetN} due={dueN} onBlock={() => setDraft({ kind: "focus", startsAt: `${ymd(anchor.getTime() < Date.now() ? new Date() : anchor)}T09:00` })} />
 
-      {view === "week" && (
+      <div ref={swipe.ref} className="cal-swipe relative">
+        <SwipePeek dx={swipe.dx} label={swipe.dx > 0 ? peek(1) : peek(-1)} />
+        <div style={{ transform: swipe.dx ? `translateX(${swipe.dx * 0.4}px)` : undefined, transition: swipe.dx ? "none" : "transform .3s var(--ease)" }}>
+        <div key={`${view}-${navKey}`} className={slide === "next" ? "cal-in-next" : slide === "prev" ? "cal-in-prev" : "animate-fade"}>
+      {(view === "week" || view === "day") && (
         <div className="grid gap-6 lg:grid-cols-[1fr_260px]">
-          <WeekGrid days={Array.from({ length: 7 }, (_, i) => addDays(range.from, i))} events={events} busy={busyShown}
+          <WeekGrid days={Array.from({ length: range.days }, (_, i) => addDays(range.from, i))} onDayOpen={view === "week" ? (d) => { go(d, null); setView("day"); } : undefined} events={events} busy={busyShown}
             deadlines={deadlines} rituals={ritualDays} partners={partners.data ?? []}
             onSlot={(d) => setDraft({ startsAt: localInput(d) })} onOpen={setOpen} onMove={move}
             onDropTask={(id, d) => { const t = tasks.data?.find((x) => x.id === id); if (t) blockTask(t, d); }} />
@@ -131,9 +291,18 @@ export default function CalendarPage() {
         </div>
       )}
       {view === "month" && <MonthGrid from={range.from} month={anchor.getMonth()} events={events} deadlines={deadlines} rituals={ritualDays}
-        onDay={(d) => { setAnchor(d); setView("week"); }} onOpen={setOpen} />}
+        onDay={(d) => { go(d, null); setView("day"); }} onOpen={setOpen} />}
       {view === "agenda" && <Agenda from={range.from} days={range.days} events={events} deadlines={deadlines} rituals={ritualDays}
         partners={partners.data ?? []} onOpen={setOpen} onNew={(d) => setDraft({ startsAt: `${ymd(d)}T09:00` })} />}
+        </div>
+        </div>
+      </div>
+
+      <Legend />
+      <p className="text-[13px] text-mute">
+        <span className="lg:hidden">מחליקים ימינה לתקופה הבאה ושמאלה לקודמת.</span>
+        <span className="hidden lg:inline">קיצורים: <Kbd>←</Kbd> הבא, <Kbd>→</Kbd> הקודם, <Kbd>T</Kbd> היום, <Kbd>D</Kbd> יום, <Kbd>W</Kbd> שבוע, <Kbd>M</Kbd> חודש, <Kbd>L</Kbd> רשימה. אפשר גם להחליק בשתי אצבעות על משטח המגע.</span>
+      </p>
 
       <Modal open={!!draft} onClose={() => setDraft(null)} title={draft?.row ? "עריכת אירוע" : draft?.kind === "focus" ? "בלוק עבודה" : "אירוע חדש"}>
         {draft && <MeetingForm key={draft.row?.id ?? `${draft.startsAt}-${draft.taskId}`} row={draft.row} startsAt={draft.startsAt} endsAt={draft.endsAt}
@@ -220,7 +389,8 @@ function layoutDay(list: Meeting[], day: Date): Placed[] {
   return out;
 }
 
-function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, onOpen, onMove, onDropTask }: {
+function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, onOpen, onMove, onDropTask, onDayOpen }: {
+  onDayOpen?: (d: Date) => void;
   days: Date[]; events: Meeting[]; busy: Busy[]; deadlines: Task[]; rituals: { id: string; title: string; on: string }[]; partners: Partner[];
   onSlot: (d: Date) => void; onOpen: (m: Meeting) => void; onMove: (m: Meeting, start: Date) => void; onDropTask: (taskId: string, start: Date) => void;
 }) {
@@ -231,6 +401,9 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
   const [drag, setDrag] = useState<null | { id: string; x: number; y: number; dx: number; dy: number; colW: number }>(null);
   const hours = Array.from({ length: LAST_H - FIRST_H }, (_, i) => FIRST_H + i);
   const todayKey = ymd(now);
+  const single = days.length === 1;
+  const cols = { gridTemplateColumns: `var(--cal-gutter) repeat(${days.length}, minmax(0, 1fr))` };
+  const who = (ids: string[]) => ids?.length ? ids.map((id) => partners.find((p) => p.id === id)?.name).filter(Boolean).join(" ו") : "שתינו";
 
   // 15-minute steps; RTL, so moving the pointer left means a later day.
   const dragShift = (d: NonNullable<typeof drag>) => ({ days: -Math.round(d.dx / d.colW), minutes: Math.round(((d.dy / HOUR_PX) * 60) / 15) * 15 });
@@ -257,11 +430,11 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
   }
 
   return (
-    <Card className="!p-0 overflow-hidden">
-      <div className="overflow-x-auto">
-        <div className="min-w-[720px]">
+    <div className="bezel"><div className="core overflow-hidden !p-0">
+      <div className="[--cal-gutter:44px] sm:[--cal-gutter:56px]">
+        <div>
           {/* day headers + all-day row */}
-          <div className="grid grid-cols-[52px_repeat(7,1fr)] border-b border-[var(--line)]">
+          <div className="grid border-b border-[var(--line)]" style={cols}>
             <div />
             {days.map((d) => {
               const key = ymd(d);
@@ -269,14 +442,21 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
               const due = deadlines.filter((t) => t.due_on === key);
               const rit = rituals.filter((r) => r.on === key);
               return (
-                <div key={key} className={`min-w-0 px-1 pb-2 pt-3 ${d.getDay() === 6 ? "opacity-50" : ""}`}>
-                  <div className="mb-1.5 flex items-baseline justify-center gap-1.5 text-[14px] text-mute">
-                    {DAYS[d.getDay()]}
-                    <span className={`inline-grid size-7 place-items-center rounded-full text-[15px] ${key === todayKey ? "bg-pink font-semibold text-ink" : "text-bone"}`}><Num>{d.getDate()}</Num></span>
-                  </div>
+                <div key={key} className={`min-w-0 px-1 pb-2 pt-3 ${key === todayKey ? "bg-pink/[.06]" : ""}`}>
+                  {(() => {
+                    const label = d.toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" });
+                    const inner = (<>
+                      <span className={key === todayKey ? "font-semibold text-pink-soft" : ""}>{single ? d.toLocaleDateString("he-IL", { weekday: "long" }) : DAYS[d.getDay()]}</span>
+                      <span className={`inline-grid size-8 place-items-center rounded-full text-[15px] ${key === todayKey ? "bg-pink font-semibold text-on-pink" : "text-bone"}`}><Num>{d.getDate()}</Num></span>
+                    </>);
+                    const cls = "mx-auto mb-1.5 flex flex-col items-center gap-0.5 rounded-[12px] px-1 py-0.5 text-[13px] text-mute sm:flex-row sm:justify-center sm:gap-1.5 sm:text-[14px]";
+                    return onDayOpen
+                      ? <button type="button" onClick={() => onDayOpen(d)} aria-label={`${label}, פתיחת היום`} aria-current={key === todayKey ? "date" : undefined} className={`press ${cls} hover:bg-[var(--hover-veil)]`}>{inner}</button>
+                      : <div className={cls} aria-current={key === todayKey ? "date" : undefined}>{inner}</div>;
+                  })()}
                   <div className="space-y-0.5">
                     {allDay.map((m) => (
-                      <button key={m.id} onClick={() => onOpen(m)} className={`press block w-full truncate rounded-[6px] px-1.5 py-0.5 text-start text-[12px] ${KIND[m.kind].cls}`}>{m.title}</button>
+                      <button key={m.id} onClick={() => onOpen(m)} aria-label={`${KIND[m.kind].label}, כל היום: ${m.title}`} className={`press block w-full truncate rounded-[6px] px-1.5 py-0.5 text-start text-[12px] ${KIND[m.kind].cls}`}>{m.title}</button>
                     ))}
                     {rit.map((r) => <div key={r.id} className="flex items-center gap-1 truncate text-[12px] text-mute"><Icon name="rhythm" size={12} className="shrink-0" /><span className="truncate">{r.title}</span></div>)}
                     {due.map((t) => <Link key={t.id} to="/tasks" className="flex items-center gap-1 truncate text-[12px] text-pink-soft"><Icon name="flag" size={12} className="shrink-0" /><span className="truncate">{t.title}</span></Link>)}
@@ -287,9 +467,9 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
           </div>
           {/* time grid */}
           <div ref={scroller} className="max-h-[68vh] overflow-y-auto">
-            <div className="relative grid grid-cols-[52px_repeat(7,1fr)]" style={{ height: hours.length * HOUR_PX }}>
+            <div className="relative grid" style={{ ...cols, height: hours.length * HOUR_PX }}>
               <div className="relative">
-                {hours.map((h, i) => <div key={h} className="absolute inset-x-0 pe-2 text-end text-[12px] text-mute" style={{ top: i * HOUR_PX - 7 }}>{i > 0 && <Num>{`${pad(h)}:00`}</Num>}</div>)}
+                {hours.map((h, i) => <div key={h} className="absolute inset-x-0 pe-1.5 text-end text-[12px] text-mute sm:pe-2" style={{ top: i * HOUR_PX - 8 }}>{i > 0 && <Num>{`${pad(h)}:00`}</Num>}</div>)}
               </div>
               {days.map((d) => {
                 const key = ymd(d);
@@ -297,9 +477,11 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
                 const base = new Date(d); base.setHours(FIRST_H, 0, 0, 0);
                 const dayBusy = busy.filter((b) => ymd(new Date(b.starts_at)) === key || ymd(new Date(b.ends_at)) === key);
                 const nowTop = key === todayKey ? ((now.getTime() - base.getTime()) / 3600e3) * HOUR_PX : -1;
+                // Time already behind us today, and days already gone, sit under a quiet veil so the eye goes forward.
+                const pastH = key < todayKey ? hours.length * HOUR_PX : key === todayKey ? Math.max(0, Math.min(hours.length * HOUR_PX, nowTop)) : 0;
                 return (
                   <div key={key} data-day={key}
-                    className={`relative border-s border-[var(--line)] ${d.getDay() === 6 ? "bg-[var(--hover-veil)]" : ""}`}
+                    className={`relative border-s border-[var(--line)] ${d.getDay() === 6 ? "bg-[var(--hover-veil)]" : key === todayKey ? "bg-pink/[.035]" : ""}`}
                     style={{ backgroundImage: `repeating-linear-gradient(to bottom, var(--line) 0 1px, transparent 1px ${HOUR_PX}px)` }}
                     onClick={(e) => { if (e.target === e.currentTarget) onSlot(timeAt(d, e.nativeEvent.offsetY)); }}
                     onDragOver={(e) => { if (e.dataTransfer.types.includes("text/task")) e.preventDefault(); }}
@@ -309,27 +491,29 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
                       const top = (e.currentTarget as HTMLElement).getBoundingClientRect().top;
                       onDropTask(id, timeAt(d, e.clientY - top));
                     }}>
+                    {pastH > 0 && <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 bg-[var(--ink)] opacity-40" style={{ height: pastH }} />}
                     {dayBusy.map((b, i) => {
                       const s = Math.max(new Date(b.starts_at).getTime(), base.getTime());
                       const e = Math.min(new Date(b.ends_at).getTime(), base.getTime() + hours.length * 3600e3);
                       if (e <= s) return null;
                       const name = partners.find((p) => p.id === b.partner_id)?.name ?? "";
                       return (
-                        <div key={i} className="pointer-events-none absolute inset-x-0.5 overflow-hidden rounded-[6px] bg-[var(--hover-veil)] px-1 text-[11px] text-mute shadow-[inset_0_0_0_1px_var(--line)]"
+                        <div key={i} className="pointer-events-none absolute inset-x-0.5 overflow-hidden rounded-[6px] bg-[var(--hover-veil)] px-1 text-[12px] leading-tight text-mute shadow-[inset_0_0_0_1px_var(--line)]"
                           style={{ top: ((s - base.getTime()) / 3600e3) * HOUR_PX, height: ((e - s) / 3600e3) * HOUR_PX }}>תפוסה · {name}</div>
                       );
                     })}
                     {placed.map(({ m, top, height, col, cols }) => {
                       const dragging = drag?.id === m.id;
-                      const who = initials(m.partner_ids, partners);
+                      const ini = initials(m.partner_ids, partners);
                       return (
-                        <button key={m.id}
+                        <button key={m.id} data-noswipe
+                          aria-label={`${KIND[m.kind].label}: ${m.title}, ${hm(m.starts_at)} עד ${hm(endOf(m))}, ${who(m.partner_ids)}${m.projects?.name ? `, ${m.projects.name}` : ""}`}
                           onPointerDown={(e) => startDrag(e, m)}
                           onPointerMove={(e) => dragging && setDrag({ ...drag!, dx: e.clientX - drag!.x, dy: e.clientY - drag!.y })}
                           onPointerUp={() => endDrag(m)}
                           onPointerCancel={() => setDrag(null)}
                           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(m); } }}
-                          className={`absolute touch-none overflow-hidden rounded-[8px] px-1.5 py-1 text-start text-[12px] leading-tight transition-shadow ${KIND[m.kind].cls} ${dragging ? "z-20 cursor-grabbing opacity-90 shadow-[0_12px_30px_-10px_rgba(0,0,0,.8)]" : "z-10 cursor-grab"}`}
+                          className={`absolute touch-none overflow-hidden rounded-[8px] px-1.5 py-1 text-start text-[12px] leading-tight transition-shadow ${KIND[m.kind].cls} ${dragging ? "z-20 cursor-grabbing opacity-90 shadow-[var(--lift-shadow)]" : "z-10 cursor-grab hover:brightness-[1.06]"}`}
                           style={{
                             top: top + 1, height: Math.max(20, height - 2),
                             insetInlineStart: `calc(${(col / cols) * 100}% + 2px)`, width: `calc(${100 / cols}% - 4px)`,
@@ -337,7 +521,7 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
                           }}>
                           <div className="flex items-start justify-between gap-1">
                             <span className="truncate font-semibold">{m.title}</span>
-                            {who && <span className="shrink-0 text-[11px] opacity-80">{who}</span>}
+                            {ini && <span className="hidden shrink-0 text-[11px] opacity-80 sm:inline">{ini}</span>}
                           </div>
                           {height > 34 && <div className="truncate opacity-80"><Num>{hm(m.starts_at)}</Num>{m.meet_link ? " · Meet" : m.location ? ` · ${m.location}` : ""}</div>}
                           {height > 52 && m.projects?.name && <div className="truncate opacity-70">{m.projects.name}</div>}
@@ -345,7 +529,10 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
                       );
                     })}
                     {nowTop >= 0 && nowTop <= hours.length * HOUR_PX && (
-                      <div className="pointer-events-none absolute inset-x-0 z-30 h-0.5 bg-pink" style={{ top: nowTop }}><span className="absolute -top-1 -start-1 size-2.5 rounded-full bg-pink" /></div>
+                      <div className="pointer-events-none absolute inset-x-0 z-30 h-0.5 bg-pink" style={{ top: nowTop }} aria-hidden>
+                        <span className="absolute -top-1 -start-1 size-2.5 rounded-full bg-pink shadow-[0_0_0_3px_color-mix(in_srgb,var(--pink)_25%,transparent)]" />
+                        {single && <span className="absolute -top-2.5 end-1 rounded-full bg-pink px-1.5 text-[11px] font-semibold leading-5 text-on-pink"><Num>{hm(now.toISOString())}</Num></span>}
+                      </div>
                     )}
                   </div>
                 );
@@ -354,8 +541,8 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
           </div>
         </div>
       </div>
-      <p className="border-t border-[var(--line)] px-4 py-2.5 text-[13px] text-mute">לחיצה על שעה פנויה יוצרת אירוע. גוררים אירוע כדי להזיז אותו, וגוררים משימה מהצד כדי לחסום לה זמן.</p>
-    </Card>
+      <p className="border-t border-[var(--line)] px-4 py-2.5 text-[13px] text-mute">לחיצה על שעה פנויה יוצרת אירוע. גוררים אירוע כדי להזיז אותו{single ? "" : ", לחיצה על יום פותחת אותו"}. אפשר גם לפתוח אירוע ולשנות את השעה בטופס.</p>
+    </div></div>
   );
 }
 
@@ -391,7 +578,7 @@ function MonthGrid({ from, month, events, deadlines, rituals, onDay, onOpen }: {
   const days = Array.from({ length: 42 }, (_, i) => addDays(from, i));
   return (
     <Card>
-      <div className="grid grid-cols-7 gap-1 text-center text-[14px] text-mute">{DAYS.map((d) => <div key={d} className="py-1">{d}</div>)}</div>
+      <div className="grid grid-cols-7 gap-1 text-center text-[14px] font-medium text-mute" aria-hidden>{DAYS.map((d) => <div key={d} className="py-1">{d}</div>)}</div>
       <div className="grid grid-cols-7 gap-1">
         {days.map((d) => {
           const key = ymd(d);
@@ -399,20 +586,24 @@ function MonthGrid({ from, month, events, deadlines, rituals, onDay, onOpen }: {
           const due = deadlines.filter((t) => t.due_on === key);
           const rit = rituals.filter((r) => r.on === key);
           return (
-            <div key={key} role="button" tabIndex={0} onClick={() => onDay(d)} onKeyDown={(e) => e.key === "Enter" && onDay(d)}
-              className={`press flex min-h-[64px] cursor-pointer flex-col items-start rounded-[12px] p-1.5 text-start hover:bg-[var(--hover-veil)] sm:min-h-[104px] ${d.getMonth() === month ? "" : "opacity-35"}`}>
-              <span className={`inline-grid size-7 place-items-center rounded-full text-[14px] ${key === todayKey ? "bg-pink font-semibold text-ink" : ""}`}><Num>{d.getDate()}</Num></span>
+            // The cell is clickable with a pointer; the date button is the keyboard and screen-reader way in,
+            // so the event buttons inside are not nested in another button.
+            <div key={key} onClick={() => onDay(d)}
+              className={`flex min-h-[64px] cursor-pointer flex-col items-start rounded-[12px] p-1.5 text-start transition-colors duration-300 hover:bg-[var(--hover-veil)] sm:min-h-[104px] ${key === todayKey ? "bg-pink/[.07] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--pink)_35%,transparent)]" : ""} ${d.getMonth() === month ? "" : "opacity-45"}`}>
+              <button type="button" onClick={(e) => { e.stopPropagation(); onDay(d); }} aria-current={key === todayKey ? "date" : undefined}
+                aria-label={`${d.toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" })}${list.length ? `, ${list.length} אירועים` : ""}${due.length ? `, ${due.length} דדליינים` : ""}`}
+                className={`press inline-grid size-8 place-items-center rounded-full text-[14px] hover:bg-[var(--hover-veil)] ${key === todayKey ? "bg-pink font-semibold text-on-pink hover:bg-pink-hover" : ""}`}><Num>{d.getDate()}</Num></button>
               <div className="mt-1 hidden w-full min-w-0 space-y-0.5 sm:block">
                 {list.slice(0, 3).map((m) => (
-                  <button key={m.id} onClick={(e) => { e.stopPropagation(); onOpen(m); }} className={`block w-full truncate rounded-[5px] px-1 text-start text-[12px] ${KIND[m.kind].cls}`}>
-                    {!m.all_day && <Num>{hm(m.starts_at)} </Num>}{m.title}
+                  <button key={m.id} onClick={(e) => { e.stopPropagation(); onOpen(m); }} aria-label={`${KIND[m.kind].label}: ${m.title}${m.all_day ? ", כל היום" : `, ${hm(m.starts_at)}`}`} className={`block w-full truncate rounded-[5px] px-1 text-start text-[12px] ${KIND[m.kind].cls}`}>
+                    {!m.all_day && <Num className="me-1 opacity-85">{hm(m.starts_at)}</Num>}{m.title}
                   </button>
                 ))}
                 {list.length > 3 && <div className="text-[12px] text-mute">+{list.length - 3}</div>}
                 {rit.slice(0, 1).map((r) => <div key={r.id} className="flex items-center gap-1 truncate text-[12px] text-mute"><Icon name="rhythm" size={12} className="shrink-0" /><span className="truncate">{r.title}</span></div>)}
                 {due.slice(0, 1).map((t) => <div key={t.id} className="flex items-center gap-1 truncate text-[12px] text-pink-soft"><Icon name="flag" size={12} className="shrink-0" /><span className="truncate">{t.title}</span></div>)}
               </div>
-              <div className="mt-1 flex gap-0.5 sm:hidden">
+              <div className="mt-1 flex gap-0.5 sm:hidden" aria-hidden>
                 {list.some((m) => m.kind === "meeting") && <span className="size-1.5 rounded-full bg-pink" />}
                 {list.some((m) => m.kind !== "meeting") && <span className="size-1.5 rounded-full bg-bone" />}
                 {due.length > 0 && <span className="size-1.5 rounded-full bg-pink-soft" />}
