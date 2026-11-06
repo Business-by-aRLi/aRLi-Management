@@ -3,9 +3,11 @@
 //   POST (from Telegram, with secret header)  -> handle a message
 //   GET  ?action=setup                         -> register the webhook and commands
 //   POST ?action=cron (x-cron-secret header)   -> send due reminders
-//   GET  .../telegram-bot/gmail/callback       -> Google sign-in redirect (connects a partner's Gmail)
+//   GET  .../telegram-bot/gmail/callback       -> Google sign-in redirect (connects a partner's Gmail + Calendar)
+//   POST ?action=calendar_sync (x-cron-secret)  -> run the Google Calendar sync now
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
+import { CALENDAR_SCOPE, GMAIL_SCOPE, googleToken, runCalendarSync } from "./gcal.ts";
 
 const BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN")!;
 const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY")!;
@@ -90,6 +92,40 @@ async function projectByName(name?: string): Promise<{ id: string; name: string;
     throw new Error(`יש יותר מפרויקט אחד שמתאים ל-"${name}": ${data.map((p) => p.name).join(", ")}`);
   }
   return data[0];
+}
+
+// "מירי" / "ריקי" -> her id; "שתינו" or nothing -> [] (both), unless a default partner is given.
+async function whoToIds(who: string | undefined, fallback: Partner | null): Promise<string[]> {
+  if (who === "שתינו") return [];
+  const p = who ? await partnerByName(who) : fallback;
+  return p ? [p.id] : [];
+}
+
+// Events and Google busy blocks that overlap a time, for the people taking part.
+async function findConflicts(startsAt: string, endsAt: string, partnerIds: string[]) {
+  const all = await partners();
+  const ids = partnerIds.length ? partnerIds : all.map((p) => p.id);
+  const end = endsAt > startsAt ? endsAt : new Date(new Date(startsAt).getTime() + 3600e3).toISOString();
+  const { data: evs } = await db.from("meetings").select("id,title,starts_at,ends_at,partner_ids,all_day")
+    .lt("starts_at", end).gte("starts_at", new Date(new Date(startsAt).getTime() - 864e5).toISOString());
+  const out: { id?: string; title: string; local: string; who?: string }[] = [];
+  for (const m of evs ?? []) {
+    const mEnd = m.ends_at ?? new Date(new Date(m.starts_at).getTime() + 3600e3).toISOString();
+    if (m.all_day || mEnd <= startsAt) continue;
+    if (m.partner_ids?.length && !m.partner_ids.some((x: string) => ids.includes(x))) continue;
+    out.push({ id: m.id, title: m.title, local: fmtDateTime(m.starts_at) });
+  }
+  const { data: busy } = await db.from("partner_busy").select("partner_id,starts_at,ends_at")
+    .in("partner_id", ids).lt("starts_at", end).gt("ends_at", startsAt);
+  for (const b of busy ?? []) {
+    out.push({ title: "תפוסה ביומן האישי", local: fmtDateTime(b.starts_at), who: all.find((p) => p.id === b.partner_id)?.name });
+  }
+  return out.slice(0, 6);
+}
+
+async function googleSynced(): Promise<boolean> {
+  const { data } = await db.from("app_config").select("value").eq("key", "gcal_calendar_id").maybeSingle();
+  return !!data;
 }
 
 async function notifyOthers(me: Partner, text: string) {
@@ -187,13 +223,44 @@ const toolDeclarations = [
   },
   {
     name: "add_meeting",
-    description: "קביעת פגישה ביומן המשותף. starts_at בפורמט ISO עם אזור הזמן של ישראל.",
+    description: "קביעת אירוע ביומן המשותף (מסונכרן ל-Google Calendar). starts_at בפורמט ISO עם אזור הזמן של ישראל. " +
+      "kind: meeting לפגישה, focus לבלוק עבודה (זמן חסום לעבודה על פרויקט או משימה), away ל\"לא זמינה\" (חופש, רופא, פרטי). " +
+      "הכלי מחזיר התנגשויות אם יש; אם יש, ספרי עליהן ושאלי אם להשאיר או להזיז.",
     parameters: S("object", undefined, {
       properties: {
-        title: S("string"), starts_at: S("string"), ends_at: S("string"),
-        location: S("string"), project_name: S("string"), notes: S("string"),
+        title: S("string"), starts_at: S("string"), ends_at: S("string", "ברירת מחדל: שעה אחרי ההתחלה"),
+        all_day: S("boolean", "אירוע של יום שלם (למשל חופש)"),
+        kind: S("string", undefined, { enum: ["meeting", "focus", "away"] }),
+        who: S("string", "מי משתתפת: מירי, ריקי או שתינו (ברירת מחדל: שתינו בפגישה, הכותבת בבלוק עבודה ובלא זמינה)", { enum: ["מירי", "ריקי", "שתינו"] }),
+        location: S("string"), project_name: S("string"), notes: S("string", "אג'נדה או הערות"),
+        task_id: S("string", "כשחוסמים זמן למשימה קיימת: ה-id שלה מ-list_tasks"),
+        meet: S("boolean", "ליצור קישור Google Meet (ברירת מחדל: כן לפגישה אונליין בלי מקום פיזי)"),
       },
       required: ["title", "starts_at"],
+    }),
+  },
+  {
+    name: "update_meeting",
+    description: "הזזה, שינוי או ביטול של אירוע ביומן. קודם מוצאים אותו עם list_schedule (שם מופיע ה-id). cancel=true מוחק אותו (גם מגוגל), רק אחרי אישור.",
+    parameters: S("object", undefined, {
+      properties: {
+        id: S("string"), title: S("string"), starts_at: S("string"), ends_at: S("string"),
+        location: S("string"), notes: S("string"), who: S("string", undefined, { enum: ["מירי", "ריקי", "שתינו"] }),
+        kind: S("string", undefined, { enum: ["meeting", "focus", "away"] }),
+        meet: S("boolean", "להוסיף קישור Google Meet"), cancel: S("boolean"),
+      },
+      required: ["id"],
+    }),
+  },
+  {
+    name: "find_free_time",
+    description: "מציאת חלונות זמן פנויים (ימים א-ה 9:00-18:00, ו׳ עד 13:00), לפי היומן המשותף ולפי התפוס/פנוי ביומני הגוגל האישיים. " +
+      "לשאלות כמו \"מתי שתינו פנויות השבוע?\" או \"מתי אפשר לקבוע עם עקיבא?\". הציעי 3-4 אפשרויות ושאלי מה לקבוע.",
+    parameters: S("object", undefined, {
+      properties: {
+        from: S("string", "תאריך התחלה YYYY-MM-DD, ברירת מחדל היום"), days: S("integer", "כמה ימים קדימה, ברירת מחדל 7"),
+        minutes: S("integer", "אורך בדקות, ברירת מחדל 60"), who: S("string", undefined, { enum: ["מירי", "ריקי", "שתינו"] }),
+      },
     }),
   },
   {
@@ -275,8 +342,8 @@ const toolDeclarations = [
     parameters: S("object", undefined, { properties: { from: S("string"), to: S("string"), partner: PARTNER } }),
   },
   {
-    name: "connect_gmail",
-    description: "שולח לשותפה קישור לחיבור תיבת ה-Gmail שלה לבוט (קריאה בלבד). להשתמש כשהיא מבקשת לחבר, או כשכלי Gmail מחזיר שאין חיבור.",
+    name: "connect_google",
+    description: "שולח לשותפה כפתור לחיבור חשבון ה-Google שלה: Gmail (קריאה בלבד, לחשבוניות) ו-Google Calendar (סנכרון היומן המשותף ותפוס/פנוי). להשתמש כשהיא מבקשת לחבר את הג'ימייל או היומן, או כשכלי מחזיר שאין חיבור.",
     parameters: S("object", undefined, { properties: {} }),
   },
   {
@@ -389,14 +456,15 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
         `${project ? ` (${project.name})` : ""}, שולם על ידי ${payer.name}.`);
       return { ok: true, id: row.id, project: project?.name ?? "כללי לעסק", paid_by: payer.name, receipt_saved: !!receiptPath };
     }
-    case "connect_gmail": {
+    case "connect_gmail":
+    case "connect_google": {
       if (!me.telegram_chat_id) throw new Error("אין צ'אט מחובר");
       const link = await gmailAuthUrl(me);
       await tg("sendMessage", {
         chat_id: me.telegram_chat_id,
-        text: "כדי לחבר את ה-Gmail שלך, לחצי על הכפתור ואשרי גישת קריאה. הקישור תקף ל-15 דקות.\n" +
-          "אם Google מציגה \"האפליקציה לא אומתה\", לחצי על \"מתקדם\" ואז \"מעבר אל aRLi\". זה תקין, זה הכלי הפנימי שלכן.",
-        reply_markup: { inline_keyboard: [[{ text: "🔗 חיבור Gmail", url: link }]] },
+        text: "כדי לחבר את חשבון ה-Google שלך (Gmail לחשבוניות, ויומן Google לסנכרון היומן המשותף), לחצי על הכפתור ואשרי. הקישור תקף ל-15 דקות.\n" +
+          "סמני את כל ההרשאות שמופיעות. אם Google מציגה \"האפליקציה לא אומתה\", לחצי על \"מתקדם\" ואז \"מעבר אל aRLi\". זה תקין, זה הכלי הפנימי שלכן.",
+        reply_markup: { inline_keyboard: [[{ text: "🔗 חיבור Google", url: link }]] },
       });
       return { ok: true, note: "הכפתור נשלח בהודעה נפרדת. אל תכתבי את הקישור בעצמך." };
     }
@@ -479,12 +547,60 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
     }
     case "add_meeting": {
       const project = await projectByName(a.project_name);
+      const kind = ["meeting", "focus", "away"].includes(a.kind) ? a.kind : "meeting";
+      const partnerIds = await whoToIds(a.who, kind === "meeting" ? null : me);
+      const startsAt = new Date(a.starts_at).toISOString();
+      const endsAt = a.ends_at ? new Date(a.ends_at).toISOString() : a.all_day ? startsAt : new Date(new Date(startsAt).getTime() + 3600e3).toISOString();
+      const conflicts = await findConflicts(startsAt, endsAt, partnerIds);
       const row = check(await db.from("meetings").insert({
-        title: a.title, starts_at: a.starts_at, ends_at: a.ends_at ?? null, location: a.location ?? null,
-        project_id: project?.id ?? null, notes: a.notes ?? null, created_by_partner_id: me.id,
-      }).select("id,starts_at").single());
-      await notifyOthers(me, `📅 ${me.name} קבעה פגישה: ${a.title}, ${fmtDateTime(row.starts_at)}${a.location ? `, ${a.location}` : ""}`);
-      return { ok: true, id: row.id, starts_at_local: fmtDateTime(row.starts_at), note: "תזכורת תישלח שעה לפני" };
+        title: a.title, starts_at: startsAt, ends_at: endsAt, all_day: !!a.all_day, kind, partner_ids: partnerIds,
+        location: a.location ?? null, project_id: project?.id ?? null, notes: a.notes ?? null, created_by_partner_id: me.id,
+        task_id: a.task_id ?? null, want_meet: a.meet ?? (kind === "meeting" && !a.location),
+      }).select("id,starts_at").single()) as { id: string; starts_at: string };
+      const label = kind === "focus" ? "חסמה זמן לעבודה" : kind === "away" ? "סימנה שהיא לא זמינה" : "קבעה פגישה";
+      await notifyOthers(me, `📅 ${me.name} ${label}: ${a.title}, ${fmtDateTime(row.starts_at)}${a.location ? `, ${a.location}` : ""}`);
+      EdgeRuntime.waitUntil(runCalendarSync(db).catch(console.error));
+      return {
+        ok: true, id: row.id, starts_at_local: fmtDateTime(row.starts_at), conflicts,
+        note: (await googleSynced()) ? "נכנס גם ליומן Google המשותף" + (kind === "meeting" ? ", ותזכורת תישלח שעה לפני" : "") : "תזכורת תישלח שעה לפני",
+      };
+    }
+    case "update_meeting": {
+      const { data: old } = await db.from("meetings").select("id,title,starts_at,ends_at,partner_ids").eq("id", a.id).maybeSingle();
+      if (!old) throw new Error("האירוע לא נמצא");
+      if (a.cancel) {
+        check(await db.from("meetings").delete().eq("id", a.id));
+        await notifyOthers(me, `🗑 ${me.name} ביטלה: ${old.title}, ${fmtDateTime(old.starts_at)}`);
+        EdgeRuntime.waitUntil(runCalendarSync(db).catch(console.error));
+        return { ok: true, cancelled: true };
+      }
+      const patch: Record<string, unknown> = { reminded_at: null, followed_up_at: null };
+      for (const k of ["title", "location", "notes"]) if (a[k] !== undefined) patch[k] = a[k];
+      if (a.kind) patch.kind = a.kind;
+      if (a.who) patch.partner_ids = await whoToIds(a.who, null);
+      if (a.meet) patch.want_meet = true;
+      if (a.starts_at) {
+        patch.starts_at = new Date(a.starts_at).toISOString();
+        // Moving keeps the length unless a new end was given.
+        const len = old.ends_at ? new Date(old.ends_at).getTime() - new Date(old.starts_at).getTime() : 3600e3;
+        patch.ends_at = a.ends_at ? new Date(a.ends_at).toISOString() : new Date(new Date(a.starts_at).getTime() + len).toISOString();
+      } else if (a.ends_at) patch.ends_at = new Date(a.ends_at).toISOString();
+      check(await db.from("meetings").update(patch).eq("id", a.id));
+      const s = (patch.starts_at as string) ?? old.starts_at, e = (patch.ends_at as string) ?? old.ends_at ?? s;
+      const conflicts = (await findConflicts(s, e, (patch.partner_ids as string[]) ?? old.partner_ids)).filter((c) => c.id !== a.id);
+      if (a.starts_at) await notifyOthers(me, `🔁 ${me.name} הזיזה: ${old.title} ל-${fmtDateTime(s)}`);
+      EdgeRuntime.waitUntil(runCalendarSync(db).catch(console.error));
+      return { ok: true, starts_at_local: fmtDateTime(s), conflicts };
+    }
+    case "find_free_time": {
+      const slots = check(await db.rpc("find_free_slots", {
+        p_from: a.from ?? null, p_days: a.days ?? 7, p_minutes: a.minutes ?? 60, p_partners: await whoToIds(a.who, null),
+      })) as { starts_at: string; ends_at: string }[];
+      const busyKnown = (await db.from("partner_busy").select("partner_id").limit(1)).data?.length;
+      return {
+        slots: slots.map((x) => ({ starts_at: x.starts_at, local: `${fmtDateTime(x.starts_at)}-${new Date(x.ends_at).toLocaleTimeString("he-IL", { timeZone: TZ, hour: "2-digit", minute: "2-digit" })}` })),
+        note: busyKnown ? "כולל תפוס/פנוי מיומני הגוגל האישיים" : "לפי היומן המשותף בלבד (יומני גוגל אישיים עוד לא מחוברים)",
+      };
     }
     case "add_reminder": {
       const target = a.for_whom === "שתינו" ? null : ((await partnerByName(a.for_whom)) ?? me);
@@ -573,7 +689,7 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
     case "list_schedule": {
       const from = a.from ? `${a.from}T00:00:00${israelNow().offset}` : new Date().toISOString();
       const to = a.to ? `${a.to}T23:59:59${israelNow().offset}` : new Date(Date.now() + 7 * 864e5).toISOString();
-      const meetings = check(await db.from("meetings").select("id,title,starts_at,location,projects(name)")
+      const meetings = check(await db.from("meetings").select("id,title,starts_at,ends_at,all_day,kind,partner_ids,location,meet_link,notes,projects(name)")
         .gte("starts_at", from).lte("starts_at", to).order("starts_at")) as { starts_at: string }[];
       const reminders = check(await db.from("reminders").select("id,message,remind_at,sent_at")
         .gte("remind_at", from).lte("remind_at", to).order("remind_at")) as { remind_at: string }[];
@@ -646,8 +762,8 @@ async function gmailAuthUrl(me: Partner): Promise<string> {
   check(await db.from("gmail_oauth_states").insert({ state, partner_id: me.id }));
   const params = new URLSearchParams({
     client_id: GOOGLE_CLIENT_ID, redirect_uri: GMAIL_REDIRECT_URI, response_type: "code",
-    scope: "https://www.googleapis.com/auth/gmail.readonly",
-    access_type: "offline", prompt: "consent", state,
+    scope: `${GMAIL_SCOPE} ${CALENDAR_SCOPE}`,
+    access_type: "offline", prompt: "consent", include_granted_scopes: "true", state,
   });
   return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
 }
@@ -689,38 +805,19 @@ async function gmailCallback(url: URL): Promise<Response> {
   })).json();
   check(await db.from("gmail_accounts").upsert({
     partner_id: st.partner_id, email: profile.emailAddress ?? "", refresh_token: tok.refresh_token,
-    connected_at: new Date().toISOString(),
+    connected_at: new Date().toISOString(), scopes: String(tok.scope ?? GMAIL_SCOPE),
   }));
-  await tell(`✅ חיברתי את ה-Gmail שלך (${profile.emailAddress ?? ""}), בהרשאת קריאה בלבד.\n` +
-    `עכשיו אפשר לבקש למשל: "תמצאי את החשבוניות של Vercel מאוקטובר ותרשמי אותן".`);
+  const calendar = String(tok.scope ?? "").includes(CALENDAR_SCOPE);
+  await tell(`✅ חיברתי את חשבון ה-Google שלך (${profile.emailAddress ?? ""}).\n` +
+    `📧 Gmail: קריאה בלבד, לחשבוניות. למשל: "תמצאי את החשבוניות של Vercel מאוקטובר".\n` +
+    (calendar
+      ? `🗓 יומן: היומן המשותף "aRLi" יופיע אצלך ב-Google Calendar תוך דקה. מה שנקבע כאן או באפליקציה נכנס אליו, ומה שתוסיפי בו נכנס למערכת. מהיומנים האישיים שלך אני רואה רק תפוס/פנוי.`
+      : `🗓 היומן לא חובר, כי ההרשאה ליומן לא סומנה. אפשר לחבר שוב עם /google ולסמן את כל ההרשאות.`));
+  if (calendar) EdgeRuntime.waitUntil(runCalendarSync(db, { busy: true }).catch(console.error));
   return backToBot;
 }
 
-const gmailTokens = new Map<string, { token: string; exp: number }>();
-
-async function gmailToken(partnerId: string): Promise<string> {
-  const cached = gmailTokens.get(partnerId);
-  if (cached && cached.exp > Date.now()) return cached.token;
-  const { data: acc } = await db.from("gmail_accounts").select("refresh_token").eq("partner_id", partnerId).maybeSingle();
-  if (!acc) throw new Error("ה-Gmail של השותפה עוד לא מחובר. אפשר לחבר עם connect_gmail.");
-  const tok = await (await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      refresh_token: acc.refresh_token, client_id: GOOGLE_CLIENT_ID ?? "", client_secret: GOOGLE_CLIENT_SECRET ?? "",
-      grant_type: "refresh_token",
-    }),
-  })).json();
-  if (!tok.access_token) {
-    if (tok.error === "invalid_grant") {
-      await db.from("gmail_accounts").delete().eq("partner_id", partnerId);
-      throw new Error("ההרשאה ל-Gmail פגה או בוטלה. צריך לחבר מחדש עם connect_gmail.");
-    }
-    throw new Error(`שגיאה בחיבור ל-Gmail: ${tok.error ?? "unknown"}`);
-  }
-  gmailTokens.set(partnerId, { token: tok.access_token, exp: Date.now() + (Number(tok.expires_in ?? 3600) - 60) * 1000 });
-  return tok.access_token;
-}
+const gmailToken = (partnerId: string) => googleToken(db, partnerId, "Gmail");
 
 async function gmailApi(partnerId: string, path: string, params: Record<string, string> = {}): Promise<unknown> {
   const token = await gmailToken(partnerId);
@@ -863,6 +960,8 @@ function systemPrompt(me: Partner, memories: { id: string; content: string; part
 - משימות אישיות: כל משימה נרשמת ככללית (גלויה לשתיכן), אלא אם ${me.name} אמרה במפורש שהיא אישית ("משימה אישית", "אישי", "פרטי"). אז רשמי עם private=true, ורק היא תראה אותה. אם משימה נשמעת אישית אבל לא נאמר כך, רשמי ככללית ושאלי בסוף התשובה אם להפוך אותה לאישית.
 - אפשר להפוך משימה קיימת לאישית או לכללית עם update_task (private).
 - זיכרון: כשמספרים לך משהו קבוע ("תזכרי ש...", העדפה, איש קשר, החלטה), שמרי עם remember_fact. כשמבקשים לשכוח או מתקנים עובדה, מחקי עם forget_fact (ואם זה תיקון, שמרי את הגרסה הנכונה). אל תשמרי כל פרט מהשיחה, רק מה שיעזור גם בעוד חודש.
+- יומן: היומן המשותף מסונכרן ל-Google Calendar (יומן בשם aRLi). יש בו שלושה סוגים: פגישה (meeting), בלוק עבודה (focus) ולא זמינה (away). "אני עובדת על X מחר 9-12" = בלוק עבודה. "אני בחופש ביום שלישי" = לא זמינה, all_day. לפני שקובעים פגישה לשתיהן בלי שעה ברורה, הציעי זמנים עם find_free_time. כש-add_meeting או update_meeting מחזירים conflicts, ספרי עליהם בקצרה ושאלי אם להשאיר. להזזה ולביטול: list_schedule ואז update_meeting. כשמבקשים לחסום זמן למשימה, מצאי אותה עם list_tasks והעבירי task_id. אם החיבור ליומן Google לא קיים והשותפה שואלת עליו, הפעילי connect_google.
+- סיכום פגישה: כשמספרים מה היה בפגישה, שמרי את עיקרי הדברים עם add_project_note (אם יש פרויקט), פתחי משימות לצעדים הבאים, ושאלי אם לרשום שעות.
 - פרויקטים: החלטה או סיכום חשוב על פרויקט נשמרים עם add_project_note. לשאלה "מה המצב ב..." או לפני הצעת מחיר, קראי get_project_notes.
 - ההיסטוריה עשויה לכלול שורות "[מידע פנימי: ...]" עם תוצאות כלים מתורות קודמות. השתמשי בהן (למשל ב-message_id וב-receipt_path), אבל לעולם אל תכתבי אותן בתשובה.
 
@@ -962,7 +1061,9 @@ const COMMANDS = [
   { command: "meeting", description: "פגישה חדשה" },
   { command: "time", description: "דיווח שעות" },
   { command: "invoices", description: "חשבוניות מה-Gmail של החודש" },
-  { command: "gmail", description: "חיבור Google (Gmail)" },
+  { command: "week", description: "השבוע שלנו ביומן" },
+  { command: "free", description: "מתי שתינו פנויות" },
+  { command: "google", description: "חיבור Google (Gmail + יומן)" },
   { command: "memory", description: "מה את זוכרת עליי" },
   { command: "help", description: "מה אפשר לעשות" },
 ];
@@ -983,7 +1084,11 @@ const HELP_TEXT = `מה אפשר לעשות איתי:
 💸 הוצאה: "שילמתי 120 ש״ח על דומיין לאתר של aRLi", או פשוט שלחי צילום חשבונית
 💰 הכנסה: "קיבלתי 3000 מ-Migdalor בהעברה"
 📝 משימה: "תוסיפי לריקי משימה לסיים את העיצוב עד יום חמישי"
-🗓 פגישה: "פגישה עם עקיבא מחר ב-10"
+🗓 פגישה: "פגישה עם עקיבא מחר ב-10" (נכנסת גם ליומן Google, עם קישור Meet אם אין מקום)
+🎯 בלוק עבודה: "תחסמי לי מחר 9-12 לעבודה על Migdalor"
+🌴 לא זמינה: "אני בחופש ביום שלישי"
+🔍 זמן פנוי: "מתי שתינו פנויות השבוע לשעתיים?" או /free
+🔁 הזזה: "תזיזי את הפגישה עם עקיבא ליום ראשון ב-11"
 ⏱ שעות: "עבדתי שעתיים על Kupat MB"
 ⏰ תזכורת: "תזכירי לי ביום ראשון ב-9 לשלם על השרת"
 🔒 משימה אישית: "משימה אישית: להחזיר את הספרים לספרייה עד יום חמישי". רק את רואה אותה, וכל השאר נרשם ככללי
@@ -1042,14 +1147,18 @@ async function showToday(me: Partner, chatId: number) {
   const now = israelNow();
   const tasks = (await myOpenTasks(me)).filter((t) => t.due_on && t.due_on <= now.date);
   const from = `${now.date}T00:00:00${now.offset}`, to = `${now.date}T23:59:59${now.offset}`;
-  const meetings = check(await db.from("meetings").select("title,starts_at,location")
-    .gte("starts_at", from).lte("starts_at", to).order("starts_at")) as { title: string; starts_at: string; location: string | null }[];
+  const meetings = (check(await db.from("meetings").select("title,starts_at,location,kind,all_day,partner_ids,meet_link")
+    .gte("starts_at", from).lte("starts_at", to).order("starts_at")) as
+    { title: string; starts_at: string; location: string | null; kind: string; all_day: boolean; partner_ids: string[]; meet_link: string | null }[])
+    .filter((m) => !m.partner_ids?.length || m.partner_ids.includes(me.id));
   const reminders = check(await db.from("reminders").select("message,remind_at").is("sent_at", null)
     .or(`partner_id.eq.${me.id},partner_id.is.null`).gte("remind_at", from).lte("remind_at", to).order("remind_at")) as { message: string; remind_at: string }[];
   const time = (iso: string) => new Date(iso).toLocaleTimeString("he-IL", { timeZone: TZ, hour: "2-digit", minute: "2-digit" });
 
   const lines = [`☀️ היום, ${now.date}`];
-  lines.push("", "🗓 פגישות:", ...(meetings.length ? meetings.map((m) => `• ${time(m.starts_at)} ${m.title}${m.location ? `, ${m.location}` : ""}`) : ["אין פגישות היום"]));
+  lines.push("", "🗓 ביומן:", ...(meetings.length
+    ? meetings.map((m) => `${KIND_ICON[m.kind] ?? "•"} ${m.all_day ? "כל היום" : time(m.starts_at)} ${m.title}${m.location ? `, ${m.location}` : ""}${m.meet_link ? `\n   ${m.meet_link}` : ""}`)
+    : ["יום פתוח, בלי פגישות"]));
   if (reminders.length) lines.push("", "⏰ תזכורות:", ...reminders.map((r) => `• ${time(r.remind_at)} ${r.message}`));
   lines.push("", "📌 משימות להיום ובאיחור:", ...(tasks.length ? tasks.map((t) => taskLine(t, now.date)) : ["אין, כל הכבוד! 🎉"]));
   if (tasks.length) lines.push("", "סיימת משהו? לחצי עליו:");
@@ -1061,6 +1170,34 @@ async function showTasks(me: Partner, chatId: number) {
   const tasks = await myOpenTasks(me);
   if (!tasks.length) { await send(chatId, "אין לך משימות פתוחות 🎉\nכדי להוסיף, כתבי למשל: משימה לשלוח הצעת מחיר עד יום ראשון"); return; }
   await send(chatId, `📋 המשימות הפתוחות שלך (${tasks.length}):\n${tasks.map((t) => taskLine(t, today)).join("\n")}\n\nסיימת משהו? לחצי עליו:`, doneButtons(tasks));
+}
+
+const KIND_ICON: Record<string, string> = { meeting: "🗓", focus: "🎯", away: "🌴" };
+
+async function showWeek(me: Partner, chatId: number) {
+  const now = israelNow();
+  const end = addDays(now.date, 7);
+  const all = await partners();
+  const { data: evs } = await db.from("meetings").select("title,starts_at,all_day,kind,partner_ids,location,meet_link")
+    .gte("starts_at", `${now.date}T00:00:00${now.offset}`).lt("starts_at", `${end}T00:00:00${now.offset}`).order("starts_at");
+  const { data: tasks } = await db.from("tasks").select("title,due_on").neq("status", "done").or(visibleTasks(me))
+    .gte("due_on", now.date).lt("due_on", end).order("due_on");
+  const day = (iso: string) => new Date(iso).toLocaleDateString("he-IL", { timeZone: TZ, weekday: "long", day: "numeric", month: "numeric" });
+  const hm = (iso: string) => new Date(iso).toLocaleTimeString("he-IL", { timeZone: TZ, hour: "2-digit", minute: "2-digit" });
+  const groups = new Map<string, string[]>();
+  for (const m of evs ?? []) {
+    const who = m.partner_ids?.length ? ` (${m.partner_ids.map((id: string) => all.find((p) => p.id === id)?.name).join(", ")})` : "";
+    const line = `${KIND_ICON[m.kind] ?? "🗓"} ${m.all_day ? "כל היום" : hm(m.starts_at)} ${m.title}${who}${m.location ? `, ${m.location}` : ""}`;
+    const k = day(m.starts_at); groups.set(k, [...(groups.get(k) ?? []), line]);
+  }
+  for (const t of tasks ?? []) {
+    const k = day(`${t.due_on}T12:00:00${now.offset}`); groups.set(k, [...(groups.get(k) ?? []), `📌 דדליין: ${t.title}`]);
+  }
+  const lines = ["🗓 השבוע שלנו", ""];
+  if (!groups.size) lines.push("שבוע פתוח לגמרי. זמן מצוין לחסום בלוקי עבודה על מה שמקדם 🙂");
+  for (const [k, ls] of groups) lines.push(k, ...ls, "");
+  lines.push("🔍 /free מוצא זמן פנוי משותף");
+  await send(chatId, lines.join("\n"));
 }
 
 async function showBalance(me: Partner, chatId: number) {
@@ -1085,7 +1222,9 @@ async function showBalance(me: Partner, chatId: number) {
 
 // Returns true when the text was a command or a keyboard button and has been handled.
 async function handleCommand(me: Partner, chatId: number, text: string, ctx: Ctx): Promise<boolean> {
-  const cmd = parseCommand(text);
+  // Deep links from the app: t.me/<bot>?start=google
+  const deep = text.trim().match(/^\/start (google|calendar|week)$/i)?.[1].toLowerCase();
+  const cmd = deep === "calendar" ? "google" : deep ?? parseCommand(text);
   if (!cmd) return false;
   switch (cmd) {
     case "start":
@@ -1100,13 +1239,24 @@ async function handleCommand(me: Partner, chatId: number, text: string, ctx: Ctx
     case "today": await showToday(me, chatId); return true;
     case "tasks": await showTasks(me, chatId); return true;
     case "balance": await showBalance(me, chatId); return true;
-    case "gmail": {
-      const { data: acc } = await db.from("gmail_accounts").select("partner_id").eq("partner_id", me.id).maybeSingle();
-      if (acc) {
-        await send(chatId, "ה-Gmail שלך כבר מחובר ✅ אפשר לבקש ממני למצוא חשבוניות, או ללחוץ /invoices.\nכדי לנתק, כתבי: תנתקי את הג'ימייל שלי");
+    case "gmail":
+    case "google": {
+      const { data: acc } = await db.from("gmail_accounts").select("email,scopes").eq("partner_id", me.id).maybeSingle();
+      if (acc?.scopes?.includes(CALENDAR_SCOPE)) {
+        await send(chatId, `חשבון ה-Google שלך מחובר ✅ (${acc.email})\n📧 Gmail לחשבוניות: /invoices\n🗓 היומן המשותף "aRLi" מסונכרן בשני הכיוונים, ומהיומנים האישיים אני רואה רק תפוס/פנוי.\nכדי לנתק, כתבי: תנתקי את חשבון הגוגל שלי`);
       } else {
-        await runTool("connect_gmail", {}, ctx);
+        if (acc) await send(chatId, "ה-Gmail שלך מחובר, אבל היומן עוד לא. צריך לאשר פעם אחת גם את הרשאת היומן:");
+        await runTool("connect_google", {}, ctx);
       }
+      return true;
+    }
+    case "week": await showWeek(me, chatId); return true;
+    case "free": {
+      const r = (await runTool("find_free_time", { days: 7, minutes: 60 }, ctx)) as { slots: { local: string }[]; note: string };
+      await send(chatId, r.slots.length
+        ? `🔍 חלונות פנויים לשתיכן השבוע (שעה):\n${r.slots.slice(0, 6).map((x) => `• ${x.local}`).join("\n")}\n\n${r.note}.\nלקבוע? כתבי למשל: "תקבעי לנו ישיבת תכנון ב${r.slots[0].local}"`
+        : "לא מצאתי חלון פנוי משותף השבוע בשעות העבודה. אפשר לבקש לשבוע הבא או לזמן קצר יותר.");
+      await remember(chatId, "/free", `הצעתי חלונות פנויים: ${r.slots.map((x) => x.local).join(", ")}`);
       return true;
     }
     case "memory": {
@@ -1161,6 +1311,28 @@ async function handleCallback(q: any) {
     await tg("editMessageReplyMarkup", { chat_id: chatId, message_id: q.message.message_id, reply_markup: { inline_keyboard: [] } });
     await send(chatId, `⏭ ${task.title}: עבר ל-${due}.`);
     await remember(chatId, `דחיתי את המשימה "${task.title}" ל-${due}`, "נדחה ✅");
+    return;
+  }
+
+  if (kind === "fu" && a) {
+    await tg("editMessageReplyMarkup", { chat_id: chatId, message_id: q.message.message_id, reply_markup: { inline_keyboard: [] } });
+    if (b === "log") {
+      const { data: m } = await db.from("meetings").select("title,starts_at,ends_at,project_id,kind,projects(name)").eq("id", a).maybeSingle();
+      if (!m?.project_id) { await answer("לא נמצא פרויקט"); return; }
+      const minutes = Math.max(15, Math.round((new Date(m.ends_at).getTime() - new Date(m.starts_at).getTime()) / 60e3 / 15) * 15);
+      const { data: row } = await db.from("time_entries").insert({
+        partner_id: me.id, project_id: m.project_id, minutes, kind: "work",
+        work_date: new Date(m.starts_at).toLocaleDateString("en-CA", { timeZone: TZ }), description: m.title,
+      }).select("id").single();
+      await answer("נרשם ✅");
+      // deno-lint-ignore no-explicit-any
+      const proj = (m as any).projects?.name;
+      await send(chatId, `⏱ רשמתי ${minutes / 60} שעות ל-${proj}: ${m.title}`,
+        row ? { inline_keyboard: [[{ text: "↩️ ביטול דיווח שעות", callback_data: `undo:time_entries:${row.id}` }]] } : undefined);
+      await remember(chatId, `רשמתי שעות על "${m.title}"`, `נרשמו ${minutes / 60} שעות ל-${proj}`);
+    } else {
+      await answer("👍");
+    }
     return;
   }
 
@@ -1352,13 +1524,49 @@ async function runCron() {
     await db.from("reminders").update({ sent_at: nowIso }).eq("id", r.id);
   }
 
-  // 2. meetings starting within the hour
+  // 2. meetings starting within the hour, to the people taking part (work blocks: 10 minutes before)
   const inHour = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-  const { data: soon } = await db.from("meetings").select("id,title,starts_at,location")
-    .is("reminded_at", null).gte("starts_at", nowIso).lte("starts_at", inHour);
+  const { data: soon } = await db.from("meetings").select("id,title,starts_at,location,kind,partner_ids,meet_link,notes")
+    .is("reminded_at", null).eq("all_day", false).in("kind", ["meeting", "focus"]).gte("starts_at", nowIso).lte("starts_at", inHour);
+  const sendToMany = async (ids: string[], text: string, markup?: unknown) => {
+    if (!ids?.length) return sendTo(null, text, markup);
+    for (const id of ids) await sendTo(id, text, markup);
+  };
   for (const m of soon ?? []) {
-    await sendTo(null, `📅 בעוד פחות משעה: ${m.title}, ${fmtDateTime(m.starts_at)}${m.location ? `, ${m.location}` : ""}`);
+    if (m.kind === "focus" && new Date(m.starts_at).getTime() - Date.now() > 10 * 60e3) continue;
+    const text = m.kind === "focus"
+      ? `🎯 בעוד כמה דקות מתחיל בלוק העבודה: ${m.title}. זמן לסגור הסחות ולהתמקד 💪`
+      : `📅 בעוד פחות משעה: ${m.title}, ${fmtDateTime(m.starts_at)}${m.location ? `, ${m.location}` : ""}` +
+        `${m.notes ? `\n📝 ${m.notes.slice(0, 300)}` : ""}`;
+    const markup = m.meet_link ? { inline_keyboard: [[{ text: "🎥 כניסה ל-Meet", url: m.meet_link }]] } : undefined;
+    await sendToMany(m.partner_ids, text, markup);
     await db.from("meetings").update({ reminded_at: nowIso }).eq("id", m.id);
+  }
+
+  // 2b. after a meeting or work block ends: how did it go, and log the hours to the project
+  const { data: ended } = await db.from("meetings").select("id,title,starts_at,ends_at,kind,partner_ids,project_id,projects(name)")
+    .is("followed_up_at", null).eq("all_day", false).in("kind", ["meeting", "focus"])
+    .lte("ends_at", nowIso).gte("ends_at", new Date(Date.now() - 3 * 3600e3).toISOString());
+  for (const m of ended ?? []) {
+    if (now.hour >= 7 && now.hour < 23) {
+      const hours = Math.max(0.25, Math.round(((new Date(m.ends_at).getTime() - new Date(m.starts_at).getTime()) / 3600e3) * 4) / 4);
+      // deno-lint-ignore no-explicit-any
+      const proj = (m as any).projects?.name as string | undefined;
+      const buttons = [
+        ...(proj ? [[{ text: `⏱ לרשום ${hours} שעות ל-${proj}`, callback_data: `fu:${m.id}:log` }]] : []),
+        [{ text: "👍 הכל טוב", callback_data: `fu:${m.id}:ok` }],
+      ];
+      const text = m.kind === "focus"
+        ? `🎯 בלוק העבודה "${m.title}" הסתיים. איך הלך? אפשר לכתוב לי מה התקדם ומה הצעד הבא.`
+        : `🤝 הפגישה "${m.title}" הסתיימה. מה סוכם? כתבי או הקליטי לי, ואשמור סיכום${proj ? ` בפרויקט ${proj}` : ""} ואפתח משימות לצעדים הבאים.`;
+      await sendToMany(m.partner_ids, text, { inline_keyboard: buttons });
+      for (const p of all) {
+        if (p.telegram_chat_id && (!m.partner_ids?.length || m.partner_ids.includes(p.id))) {
+          await remember(p.telegram_chat_id, `[היומן: "${m.title}" (${m.kind}, id ${m.id}${proj ? `, פרויקט ${proj}` : ""}) הסתיים]`, text);
+        }
+      }
+    }
+    await db.from("meetings").update({ followed_up_at: nowIso }).eq("id", m.id);
   }
 
   // 3. task deadlines, once a day from 08:00
@@ -1384,7 +1592,10 @@ async function runCron() {
       const { data: exp } = await db.from("expenses").select("amount").gte("spent_on", weekAgo);
       const { data: inc } = await db.from("income").select("amount").gte("received_on", weekAgo);
       const sum = (rows: { amount: number }[] | null) => (rows ?? []).reduce((s, r) => s + Number(r.amount), 0);
-      await sendTo(null, `📊 סיכום שבועי\nהוצאות השבוע: ${fmtMoney(sum(exp))}\nהכנסות השבוע: ${fmtMoney(sum(inc))}`);
+      const { count: ahead } = await db.from("meetings").select("id", { count: "exact", head: true })
+        .eq("kind", "meeting").gte("starts_at", nowIso).lt("starts_at", new Date(Date.now() + 7 * 864e5).toISOString());
+      await sendTo(null, `📊 סיכום שבועי\nהוצאות השבוע: ${fmtMoney(sum(exp))}\nהכנסות השבוע: ${fmtMoney(sum(inc))}\n` +
+        `🗓 השבוע הקרוב: ${ahead ?? 0} פגישות. /week מראה הכל, ו-/free מוצא זמן משותף לבלוקי עבודה.`);
       await db.from("app_config").upsert({ key: "weekly_summary_sent", value: now.date });
     }
   }
@@ -1411,10 +1622,17 @@ Deno.serve(async (req) => {
     return Response.json({ webhook: hook, commands, bot: me.result?.username });
   }
 
+  if (action === "calendar_sync") {
+    const { data } = await db.from("app_config").select("value").eq("key", "cron_secret").single();
+    if (!data || req.headers.get("x-cron-secret") !== data.value) return new Response("forbidden", { status: 403 });
+    return Response.json(await runCalendarSync(db, { busy: true }));
+  }
+
   if (action === "cron") {
     const { data } = await db.from("app_config").select("value").eq("key", "cron_secret").single();
     if (!data || req.headers.get("x-cron-secret") !== data.value) return new Response("forbidden", { status: 403 });
-    return Response.json(await runCron());
+    const [cron, calendar] = await Promise.all([runCron(), runCalendarSync(db).catch((e) => ({ ok: false, error: String(e) }))]);
+    return Response.json({ ...cron, calendar });
   }
 
   if (req.headers.get("x-telegram-bot-api-secret-token") !== (await webhookSecret())) {
