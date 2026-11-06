@@ -36,10 +36,14 @@ async function tg(method: string, body: unknown) {
   return r.json();
 }
 
-async function send(chatId: number, text: string) {
-  // Telegram limit is 4096 characters per message.
+async function send(chatId: number, text: string, replyMarkup?: unknown) {
+  // Telegram limit is 4096 characters per message. Buttons go on the last chunk.
   for (let i = 0; i < text.length; i += 4000) {
-    await tg("sendMessage", { chat_id: chatId, text: text.slice(i, i + 4000) });
+    const last = i + 4000 >= text.length;
+    await tg("sendMessage", {
+      chat_id: chatId, text: text.slice(i, i + 4000),
+      ...(last && replyMarkup ? { reply_markup: replyMarkup } : {}),
+    });
   }
 }
 
@@ -300,7 +304,19 @@ const toolDeclarations = [
   },
 ];
 
-type Ctx = { me: Partner; receiptPath: string | null; today: string };
+type Created = { table: string; id: string; label: string };
+type Ctx = { me: Partner; receiptPath: string | null; today: string; created?: Created[] };
+
+// Records the bot creates, so it can offer an undo button after it answers.
+const UNDOABLE: Record<string, { table: string; label: string }> = {
+  add_expense: { table: "expenses", label: "הוצאה" },
+  add_income: { table: "income", label: "הכנסה" },
+  add_settlement: { table: "settlements", label: "העברה" },
+  add_task: { table: "tasks", label: "משימה" },
+  add_meeting: { table: "meetings", label: "פגישה" },
+  add_reminder: { table: "reminders", label: "תזכורת" },
+  log_time: { table: "time_entries", label: "דיווח שעות" },
+};
 
 // deno-lint-ignore no-explicit-any
 async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
@@ -463,7 +479,7 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
     }
     case "get_balance": {
       // Three parties: the business, Miri and Riki. Nobody "holds" money.
-      const rows = check(await db.from("partner_summary").select("name,invested,profit_share,received,balance")) as { name: string; invested: number; profit_share: number; received: number; balance: number }[];
+      const rows = check(await db.from("partner_summary").select("name,invested,profit_share,expected_profit_share,received,balance")) as { name: string; invested: number; profit_share: number; expected_profit_share: number; received: number; balance: number }[];
       const business = check(await db.from("business_summary").select("*").single());
       const gets = rows.find((r) => r.balance > 0.005);
       const gives = rows.find((r) => r.balance < -0.005);
@@ -816,6 +832,9 @@ async function converse(me: Partner, chatId: number, userParts: any[], userText:
       let result: unknown;
       try {
         result = await runTool(c.functionCall.name, c.functionCall.args ?? {}, ctx);
+        const undo = UNDOABLE[c.functionCall.name];
+        const r = result as { ok?: boolean; id?: string };
+        if (undo && r?.ok && r.id) (ctx.created ??= []).push({ table: undo.table, id: r.id, label: undo.label });
       } catch (e) {
         result = { error: (e as Error).message };
       }
@@ -834,6 +853,216 @@ async function converse(me: Partner, chatId: number, userParts: any[], userText:
     },
   ]);
   return answer;
+}
+
+// ---------- menu, commands and buttons ----------
+const COMMANDS = [
+  { command: "menu", description: "תפריט כפתורים ראשי" },
+  { command: "today", description: "מה יש לי היום" },
+  { command: "tasks", description: "המשימות הפתוחות שלי" },
+  { command: "balance", description: "ההתחשבנות בינינו" },
+  { command: "expense", description: "הוצאה חדשה" },
+  { command: "income", description: "הכנסה חדשה" },
+  { command: "meeting", description: "פגישה חדשה" },
+  { command: "time", description: "דיווח שעות" },
+  { command: "invoices", description: "חשבוניות מה-Gmail של החודש" },
+  { command: "gmail", description: "חיבור Google (Gmail)" },
+  { command: "help", description: "מה אפשר לעשות" },
+];
+
+// Bottom keyboard: each label maps to a command.
+const KEY_LABELS: Record<string, string> = {
+  "📅 היום": "today", "📋 משימות": "tasks", "⚖️ התחשבנות": "balance", "⚖️ מאזן": "balance",
+  "💸 הוצאה": "expense", "🗓 פגישה": "meeting", "⏱ שעות": "time",
+};
+const MAIN_KEYBOARD = {
+  keyboard: [["📅 היום", "📋 משימות", "⚖️ התחשבנות"], ["💸 הוצאה", "🗓 פגישה", "⏱ שעות"]].map((row) => row.map((text) => ({ text }))),
+  resize_keyboard: true,
+  is_persistent: true,
+  input_field_placeholder: "כתבי, הקליטי או שלחי חשבונית",
+};
+
+const HELP_TEXT = `מה אפשר לעשות איתי:
+💸 הוצאה: "שילמתי 120 ש״ח על דומיין לאתר של aRLi", או פשוט שלחי צילום חשבונית
+💰 הכנסה: "קיבלתי 3000 מ-Migdalor בהעברה"
+📝 משימה: "תוסיפי לריקי משימה לסיים את העיצוב עד יום חמישי"
+🗓 פגישה: "פגישה עם עקיבא מחר ב-10"
+⏱ שעות: "עבדתי שעתיים על Kupat MB"
+⏰ תזכורת: "תזכירי לי ביום ראשון ב-9 לשלם על השרת"
+📧 חשבוניות: "תמצאי לי את החשבוניות מ-Vercel של החודש"
+🎙 אפשר גם הודעה קולית, אני אבין.
+
+הכפתורים למטה ותפריט הפקודות (Menu) הם קיצורי דרך.`;
+
+// What to ask for when a quick-action button opens a new entry.
+const PROMPTS: Record<string, string> = {
+  expense: "💸 הוצאה חדשה. כתבי סכום, על מה ואיזה פרויקט (אם יש), או פשוט שלחי צילום או PDF של החשבונית.\nלמשל: 120 על דומיין ל-aRLi Website",
+  income: "💰 הכנסה חדשה. כמה, מאיזה פרויקט, ואיך התקבל?\nלמשל: 3000 מ-Migdalor בהעברה",
+  meeting: "🗓 פגישה חדשה. מה, מתי ואיפה?\nלמשל: פגישה עם עקיבא מחר ב-10 בזום",
+  time: "⏱ דיווח שעות. כמה זמן, על איזה פרויקט, והאם זו עבודה או למידה?\nלמשל: שעתיים על Kupat MB, או שעה למידה על agent-miri",
+};
+
+function parseCommand(text: string): string | null {
+  const t = text.trim();
+  if (KEY_LABELS[t]) return KEY_LABELS[t];
+  const m = t.match(/^\/([a-z_]+)(?:@\w+)?$/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+// Saves a short exchange in the chat history, so the model knows what the next message answers.
+async function remember(chatId: number, userText: string, botText: string) {
+  await db.from("bot_messages").insert([
+    { chat_id: chatId, role: "user", content: userText },
+    { chat_id: chatId, role: "model", content: botText },
+  ]);
+}
+
+// deno-lint-ignore no-explicit-any
+function taskLine(t: any, today: string) {
+  const due = t.due_on ? (t.due_on < today ? ` (באיחור, ${t.due_on})` : t.due_on === today ? " (היום)" : ` (עד ${t.due_on})`) : "";
+  return `${t.priority === 1 ? "🔴" : "▫️"} ${t.title}${t.projects?.name ? ` · ${t.projects.name}` : ""}${due}`;
+}
+
+// deno-lint-ignore no-explicit-any
+function doneButtons(tasks: any[]) {
+  return {
+    inline_keyboard: tasks.slice(0, 12).map((t) => [{
+      text: `✅ ${t.title.length > 30 ? t.title.slice(0, 30) + "…" : t.title}`, callback_data: `done:${t.id}`,
+    }]),
+  };
+}
+
+async function myOpenTasks(me: Partner) {
+  return check(await db.from("tasks").select("id,title,status,due_on,priority,projects(name)")
+    .neq("status", "done").or(`assignee_partner_id.eq.${me.id},assignee_partner_id.is.null`)
+    // deno-lint-ignore no-explicit-any
+    .order("due_on", { ascending: true, nullsFirst: false }).order("priority").limit(30)) as any[];
+}
+
+async function showToday(me: Partner, chatId: number) {
+  const now = israelNow();
+  const tasks = (await myOpenTasks(me)).filter((t) => t.due_on && t.due_on <= now.date);
+  const from = `${now.date}T00:00:00${now.offset}`, to = `${now.date}T23:59:59${now.offset}`;
+  const meetings = check(await db.from("meetings").select("title,starts_at,location")
+    .gte("starts_at", from).lte("starts_at", to).order("starts_at")) as { title: string; starts_at: string; location: string | null }[];
+  const reminders = check(await db.from("reminders").select("message,remind_at").is("sent_at", null)
+    .or(`partner_id.eq.${me.id},partner_id.is.null`).gte("remind_at", from).lte("remind_at", to).order("remind_at")) as { message: string; remind_at: string }[];
+  const time = (iso: string) => new Date(iso).toLocaleTimeString("he-IL", { timeZone: TZ, hour: "2-digit", minute: "2-digit" });
+
+  const lines = [`☀️ היום, ${now.date}`];
+  lines.push("", "🗓 פגישות:", ...(meetings.length ? meetings.map((m) => `• ${time(m.starts_at)} ${m.title}${m.location ? `, ${m.location}` : ""}`) : ["אין פגישות היום"]));
+  if (reminders.length) lines.push("", "⏰ תזכורות:", ...reminders.map((r) => `• ${time(r.remind_at)} ${r.message}`));
+  lines.push("", "📌 משימות להיום ובאיחור:", ...(tasks.length ? tasks.map((t) => taskLine(t, now.date)) : ["אין, כל הכבוד! 🎉"]));
+  if (tasks.length) lines.push("", "סיימת משהו? לחצי עליו:");
+  await send(chatId, lines.join("\n"), tasks.length ? doneButtons(tasks) : undefined);
+}
+
+async function showTasks(me: Partner, chatId: number) {
+  const today = israelNow().date;
+  const tasks = await myOpenTasks(me);
+  if (!tasks.length) { await send(chatId, "אין לך משימות פתוחות 🎉\nכדי להוסיף, כתבי למשל: משימה לשלוח הצעת מחיר עד יום ראשון"); return; }
+  await send(chatId, `📋 המשימות הפתוחות שלך (${tasks.length}):\n${tasks.map((t) => taskLine(t, today)).join("\n")}\n\nסיימת משהו? לחצי עליו:`, doneButtons(tasks));
+}
+
+async function showBalance(me: Partner, chatId: number) {
+  const bal = (await runTool("get_balance", {}, { me, receiptPath: null, today: israelNow().date })) as {
+    summary: string;
+    // deno-lint-ignore no-explicit-any
+    business: any;
+    partners: { name: string; invested: number; profit_share: number; expected_profit_share: number; balance: number }[];
+  };
+  const b = bal.business ?? {};
+  const lines = ["⚖️ התחשבנות", ""];
+  lines.push(`🏢 העסק: רווח ${fmtMoney(b.profit ?? 0)} (הכנסות ${fmtMoney(b.income ?? 0)}, הוצאות פרויקטים ${fmtMoney(b.project_expenses ?? 0)}, השקעות כלליות ${fmtMoney(b.general_expenses ?? 0)})`);
+  const pending = Number(b.outstanding ?? 0) > 0.005;
+  if (pending) lines.push(`🔮 רווח צפוי ${fmtMoney(b.expected_profit ?? 0)} · פער: עוד ${fmtMoney(b.outstanding)} מלקוחות`);
+  lines.push("");
+  for (const p of bal.partners) {
+    lines.push(`${p.name}: השקיעה ${fmtMoney(p.invested)} · חלקה ברווח ${fmtMoney(p.profit_share)}` +
+      `${pending ? ` · חלקה ברווח הצפוי ${fmtMoney(p.expected_profit_share ?? 0)}` : ""} · סה"כ יתרה ${fmtMoney(p.balance)}`);
+  }
+  await send(chatId, lines.join("\n"));
+}
+
+// Returns true when the text was a command or a keyboard button and has been handled.
+async function handleCommand(me: Partner, chatId: number, text: string, ctx: Ctx): Promise<boolean> {
+  const cmd = parseCommand(text);
+  if (!cmd) return false;
+  switch (cmd) {
+    case "start":
+      await send(chatId, `היי ${me.name} 🙂 מה נעשה היום? בחרי כפתור למטה, או פשוט כתבי לי.`, MAIN_KEYBOARD);
+      return true;
+    case "menu":
+      await send(chatId, "התפריט למטה 👇 אפשר גם לכתוב לי חופשי או לשלוח הודעה קולית.", MAIN_KEYBOARD);
+      return true;
+    case "help":
+      await send(chatId, HELP_TEXT, MAIN_KEYBOARD);
+      return true;
+    case "today": await showToday(me, chatId); return true;
+    case "tasks": await showTasks(me, chatId); return true;
+    case "balance": await showBalance(me, chatId); return true;
+    case "gmail": {
+      const { data: acc } = await db.from("gmail_accounts").select("partner_id").eq("partner_id", me.id).maybeSingle();
+      if (acc) {
+        await send(chatId, "ה-Gmail שלך כבר מחובר ✅ אפשר לבקש ממני למצוא חשבוניות, או ללחוץ /invoices.\nכדי לנתק, כתבי: תנתקי את הג'ימייל שלי");
+      } else {
+        await runTool("connect_gmail", {}, ctx);
+      }
+      return true;
+    }
+    case "invoices":
+      return false; // handled by the model, with a ready-made request (see handleMessage)
+  }
+  if (PROMPTS[cmd]) {
+    await send(chatId, PROMPTS[cmd]);
+    await remember(chatId, `/${cmd}`, PROMPTS[cmd]);
+    return true;
+  }
+  await send(chatId, "לא מכירה את הפקודה הזו. /help יראה לך מה אפשר.");
+  return true;
+}
+
+// deno-lint-ignore no-explicit-any
+async function handleCallback(q: any) {
+  const chatId: number | undefined = q.message?.chat?.id;
+  const me = (await partners()).find((p) => p.telegram_chat_id === chatId);
+  const answer = (text: string) => tg("answerCallbackQuery", { callback_query_id: q.id, text });
+  if (!me || !chatId) { await answer("אין הרשאה"); return; }
+  const [kind, a, b] = String(q.data ?? "").split(":");
+
+  if (kind === "done" && a) {
+    const { data: task } = await db.from("tasks").update({ status: "done", completed_at: new Date().toISOString() })
+      .eq("id", a).select("title").maybeSingle();
+    await answer(task ? `✅ ${task.title}` : "המשימה לא נמצאה");
+    // Drop the button of the task that was just finished.
+    // deno-lint-ignore no-explicit-any
+    const rows = (q.message.reply_markup?.inline_keyboard ?? []).filter((r: any[]) => r[0]?.callback_data !== q.data);
+    await tg("editMessageReplyMarkup", { chat_id: chatId, message_id: q.message.message_id, reply_markup: { inline_keyboard: rows } });
+    if (task) await remember(chatId, `סימנתי כבוצעה: ${task.title}`, "מעולה, סימנתי ✅");
+    return;
+  }
+
+  if (kind === "undo" && a && b && Object.values(UNDOABLE).some((u) => u.table === a)) {
+    let receipt: string | null = null;
+    if (a === "expenses") {
+      const { data } = await db.from("expenses").select("receipt_path").eq("id", b).maybeSingle();
+      receipt = data?.receipt_path ?? null;
+    }
+    const { data: gone } = await db.from(a).delete().eq("id", b).select("id");
+    if (receipt) await db.storage.from("receipts").remove([receipt]);
+    const label = Object.values(UNDOABLE).find((u) => u.table === a)!.label;
+    await answer(gone?.length ? `בוטל: ${label}` : "כבר נמחק");
+    // deno-lint-ignore no-explicit-any
+    const rows = (q.message.reply_markup?.inline_keyboard ?? []).filter((r: any[]) => r[0]?.callback_data !== q.data);
+    await tg("editMessageReplyMarkup", { chat_id: chatId, message_id: q.message.message_id, reply_markup: { inline_keyboard: rows } });
+    if (gone?.length) {
+      await send(chatId, `↩️ ביטלתי את ה${label}.`);
+      await remember(chatId, `ביטלתי את ה${label} שנרשמה (${a} ${b})`, "בוטל, הרשומה נמחקה.");
+      if (["expenses", "income", "settlements", "meetings"].includes(a)) await notifyOthers(me, `↩️ ${me.name} ביטלה ${label} שנרשמה קודם.`);
+    }
+    return;
+  }
+  await answer("");
 }
 
 // ---------- Telegram message handling ----------
@@ -863,7 +1092,7 @@ async function handleMessage(msg: any) {
       const { data } = await db.from("partners").update({ telegram_chat_id: chatId, telegram_link_code: null })
         .eq("telegram_link_code", code).select("id,name,telegram_chat_id").maybeSingle();
       if (data) {
-        await send(chatId, `היי ${data.name}! 🎉 חיברתי אותך. מעכשיו אפשר לכתוב לי, לשלוח צילום חשבונית או הודעה קולית.\nלמשל: "שילמתי 120 ש״ח על דומיין לאתר של aRLi" או "מה המאזן בינינו?"`);
+        await send(chatId, `היי ${data.name}! 🎉 חיברתי אותך. מעכשיו אפשר לכתוב לי, לשלוח צילום חשבונית או הודעה קולית.\nלמשל: "שילמתי 120 ש״ח על דומיין לאתר של aRLi" או "מה המאזן בינינו?"\nהכפתורים למטה הם קיצורי דרך, ו-/help מראה הכל.`, MAIN_KEYBOARD);
         return;
       }
     }
@@ -895,8 +1124,14 @@ async function handleMessage(msg: any) {
     parts.push({ text: "זו הודעה קולית ממני. הביני ובצעי." });
     logText = "[הודעה קולית]";
   } else if (text) {
-    if (text === "/start") { await send(chatId, `את כבר מחוברת, ${me.name} 🙂`); return; }
-    parts.push({ text });
+    if (await handleCommand(me, chatId, text, ctx)) return;
+    if (parseCommand(text) === "invoices") {
+      const req = `תמצאי לי חשבוניות וקבלות ב-Gmail מתחילת החודש (${today.slice(0, 7)}-01) עד היום`;
+      parts.push({ text: req });
+      logText = req;
+    } else {
+      parts.push({ text });
+    }
   } else {
     return;
   }
@@ -904,7 +1139,8 @@ async function handleMessage(msg: any) {
   await tg("sendChatAction", { chat_id: chatId, action: "typing" });
   try {
     const answer = await converse(me, chatId, parts, logText, ctx);
-    await send(chatId, answer);
+    const undo = (ctx.created ?? []).slice(0, 4).map((c) => [{ text: `↩️ ביטול ${c.label}`, callback_data: `undo:${c.table}:${c.id}` }]);
+    await send(chatId, answer, undo.length ? { inline_keyboard: undo } : undefined);
   } catch (e) {
     console.error(e);
     await send(chatId, "אופס, משהו השתבש אצלי. נסי שוב בעוד רגע.");
@@ -957,8 +1193,7 @@ async function runCron() {
       const { data: exp } = await db.from("expenses").select("amount").gte("spent_on", weekAgo);
       const { data: inc } = await db.from("income").select("amount").gte("received_on", weekAgo);
       const sum = (rows: { amount: number }[] | null) => (rows ?? []).reduce((s, r) => s + Number(r.amount), 0);
-      const bal = (await runTool("get_balance", {}, { me: all[0], receiptPath: null, today: now.date })) as { summary: string };
-      await sendTo(null, `📊 סיכום שבועי\nהוצאות השבוע: ${fmtMoney(sum(exp))}\nהכנסות השבוע: ${fmtMoney(sum(inc))}\nהתחשבנות: ${bal.summary}`);
+      await sendTo(null, `📊 סיכום שבועי\nהוצאות השבוע: ${fmtMoney(sum(exp))}\nהכנסות השבוע: ${fmtMoney(sum(inc))}`);
       await db.from("app_config").upsert({ key: "weekly_summary_sent", value: now.date });
     }
   }
@@ -976,12 +1211,13 @@ Deno.serve(async (req) => {
     const hook = await tg("setWebhook", {
       url: `${SUPABASE_URL}/functions/v1/telegram-bot`,
       secret_token: await webhookSecret(),
-      allowed_updates: ["message"],
+      allowed_updates: ["message", "callback_query"],
       drop_pending_updates: true,
     });
-    await tg("setMyCommands", { commands: [{ command: "start", description: "התחברות לבוט" }] });
+    const commands = await tg("setMyCommands", { commands: COMMANDS });
+    await tg("setChatMenuButton", { menu_button: { type: "commands" } });
     const me = await tg("getMe", {});
-    return Response.json({ webhook: hook, bot: me.result?.username });
+    return Response.json({ webhook: hook, commands, bot: me.result?.username });
   }
 
   if (action === "cron") {
@@ -995,5 +1231,6 @@ Deno.serve(async (req) => {
   }
   const update = await req.json();
   if (update.message) EdgeRuntime.waitUntil(handleMessage(update.message).catch(console.error));
+  if (update.callback_query) EdgeRuntime.waitUntil(handleCallback(update.callback_query).catch(console.error));
   return new Response("ok");
 });
