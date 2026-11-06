@@ -13,7 +13,7 @@ export type WorkPlan = { id: string; title: string; period_start: string | null;
 export type Financials = { project_id: string; name: string; type: string; status: string; income: number; expenses: number; profit: number; shares_percent_total: number; agreed_price: number | null; outstanding: number; expected_income: number; expected_profit: number };
 export type Balance = { partner_id: string; name: string; entitled: number; held: number; net_position: number };
 export type Expense = {
-  id: string; spent_on: string; amount: number; description: string; category: string | null; reference: string | null;
+  id: string; spent_on: string; amount: number; description: string; vendor?: string | null; category: string | null; reference: string | null;
   receipt_path: string | null; notes?: string | null; project_id: string | null; paid_by_partner_id: string | null;
   projects?: { name: string } | null; partners?: { name: string } | null;
 };

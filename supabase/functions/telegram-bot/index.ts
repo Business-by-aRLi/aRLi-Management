@@ -164,6 +164,7 @@ const toolDeclarations = [
       properties: {
         amount: S("number", "סכום בשקלים"),
         description: S("string", "על מה ההוצאה"),
+        vendor: S("string", "הספק: למי שולם הכסף (חברה, חנות או אדם), למשל Vercel, אופיס דיפו"),
         spent_on: S("string", "תאריך YYYY-MM-DD"),
         project_name: S("string"),
         paid_by: PARTNER,
@@ -449,12 +450,12 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
         ? a.receipt_path
         : (a.attach_receipt !== false ? ctx.receiptPath : null);
       const row = check(await db.from("expenses").insert({
-        amount: a.amount, description: a.description, spent_on: a.spent_on ?? ctx.today,
+        amount: a.amount, description: a.description, vendor: a.vendor || null, spent_on: a.spent_on ?? ctx.today,
         project_id: project?.id ?? null, paid_by_partner_id: payer.id, category: a.category ?? null,
         reference: a.reference ?? null, notes: a.notes ?? null,
         receipt_path: receiptPath, gmail_message_id: a.gmail_message_id ?? null,
       }).select("id").single());
-      await notifyOthers(me, `💸 ${me.name} רשמה הוצאה: ${fmtMoney(a.amount)} על ${a.description}` +
+      await notifyOthers(me, `💸 ${me.name} רשמה הוצאה: ${fmtMoney(a.amount)} על ${a.description}${a.vendor ? ` (${a.vendor})` : ""}` +
         `${project ? ` (${project.name})` : ""}, שולם על ידי ${payer.name}.`);
       return { ok: true, id: row.id, project: project?.name ?? "כללי לעסק", paid_by: payer.name, receipt_saved: !!receiptPath };
     }
@@ -682,7 +683,7 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
       const dateCol = isExp ? "spent_on" : "received_on";
       const partnerCol = isExp ? "paid_by_partner_id" : "received_by_partner_id";
       let q = db.from(a.kind).select(
-        isExp ? "id,spent_on,amount,description,category,reference,receipt_path,projects(name),partners(name)"
+        isExp ? "id,spent_on,amount,description,vendor,category,reference,receipt_path,projects(name),partners(name)"
               : "id,received_on,amount,method,notes,projects(name),partners(name)",
       );
       if (a.from) q = q.gte(dateCol, a.from);
@@ -967,9 +968,9 @@ function systemPrompt(me: Partner, memories: { id: string; content: string; part
 מה את עושה:
 - רושמת הוצאות, הכנסות, העברות בין השותפות, משימות, פגישות, תזכורות ושעות, דרך הכלים.
 - עונה על שאלות לגבי המאזן, פרויקטים, הוצאות, משימות ולו"ז, תמיד מתוך הכלים ולא מהזיכרון.
-- כשמגיע צילום של חשבונית או קבלה: קראי את הסכום, התאריך, שם הספק ומספר החשבונית, ורשמי אותה כהוצאה עם attach_receipt=true. אם לא ברור לאיזה פרויקט היא שייכת, שאלי. אם שום דבר לא ברור, שאלי לפני שאת רושמת.
+- כשמגיע צילום של חשבונית או קבלה: קראי את הסכום, התאריך, שם הספק ומספר החשבונית, ורשמי אותה כהוצאה עם vendor (שם הספק) ו-attach_receipt=true. אם לא ברור לאיזה פרויקט היא שייכת, שאלי. אם שום דבר לא ברור, שאלי לפני שאת רושמת.
 - כשמגיעה הודעה קולית: הביני מה נאמר ופעלי לפי זה, ובתשובה כתבי בקצרה מה הבנת.
-- חשבוניות מ-Gmail: כשמבקשים למצוא חשבוניות במייל, חפשי עם search_gmail_invoices (בנו שאילתת Gmail עם ספק, טווח תאריכים after:/before: בפורמט YYYY/MM/DD, ומילים כמו invoice, receipt, חשבונית, קבלה). קראי כל מייל רלוונטי שעוד לא נרשם עם read_gmail_invoice. אחר כך הציגי רשימה קצרה: ספק, תאריך, סכום ומטבע, ופרויקט משוער. רשמי עם add_expense רק אחרי שהשותפה אישרה, ותמיד העבירי gmail_message_id ו-receipt_path. אם הסכום לא בשקלים, שאלי מה הסכום בשקלים (למשל מהחיוב בכרטיס), ורשמי את הסכום המקורי ב-notes. אם הכלי אומר שה-Gmail לא מחובר, הפעילי connect_gmail.
+- חשבוניות מ-Gmail: כשמבקשים למצוא חשבוניות במייל, חפשי עם search_gmail_invoices (בנו שאילתת Gmail עם ספק, טווח תאריכים after:/before: בפורמט YYYY/MM/DD, ומילים כמו invoice, receipt, חשבונית, קבלה). קראי כל מייל רלוונטי שעוד לא נרשם עם read_gmail_invoice. אחר כך הציגי רשימה קצרה: ספק, תאריך, סכום ומטבע, ופרויקט משוער. רשמי עם add_expense רק אחרי שהשותפה אישרה, ותמיד העבירי vendor, gmail_message_id ו-receipt_path. אם הסכום לא בשקלים, שאלי מה הסכום בשקלים (למשל מהחיוב בכרטיס), ורשמי את הסכום המקורי ב-notes. אם הכלי אומר שה-Gmail לא מחובר, הפעילי connect_gmail.
 - משימות אישיות: כל משימה נרשמת ככללית (גלויה לשתיכן), אלא אם ${me.name} אמרה במפורש שהיא אישית ("משימה אישית", "אישי", "פרטי"). אז רשמי עם private=true, ורק היא תראה אותה. אם משימה נשמעת אישית אבל לא נאמר כך, רשמי ככללית ושאלי בסוף התשובה אם להפוך אותה לאישית.
 - אפשר להפוך משימה קיימת לאישית או לכללית עם update_task (private).
 - זיכרון: כשמספרים לך משהו קבוע ("תזכרי ש...", העדפה, איש קשר, החלטה), שמרי עם remember_fact. כשמבקשים לשכוח או מתקנים עובדה, מחקי עם forget_fact (ואם זה תיקון, שמרי את הגרסה הנכונה). אל תשמרי כל פרט מהשיחה, רק מה שיעזור גם בעוד חודש.

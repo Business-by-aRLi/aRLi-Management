@@ -92,7 +92,7 @@ function ExpensesList({ onEdit }: { onEdit: (r: Expense) => void }) {
       {rows.map((r) => (
         <Row key={r.id} date={r.spent_on} amount={r.amount} onEdit={() => onEdit(r)}
           title={r.description}
-          meta={<>{r.projects?.name ?? "כללי"} · שילמה {r.partners?.name ?? "?"}{r.reference && <> · <Num>#{r.reference}</Num></>}</>}
+          meta={<>{r.vendor && <>{r.vendor} · </>}{r.projects?.name ?? "כללי"} · שילמה {r.partners?.name ?? "?"}{r.reference && <> · <Num>#{r.reference}</Num></>}</>}
           actions={<>
             {r.receipt_path && <IconButton icon="receipt" label="פתיחת הקבלה" onClick={async () => { const u = await receiptUrl(r.receipt_path!); if (u) window.open(u, "_blank"); }} />}
             <IconButton icon="trash" label="מחיקת ההוצאה" onClick={async () => (await confirm({ title: "למחוק את ההוצאה?", body: `${r.description}, ${money(r.amount)}` })) && remove.mutate(r.id)} />

@@ -36,7 +36,7 @@ function Actions({ pending, error, onCancel }: { pending: boolean; error: unknow
 
 const nullIfEmpty = (v: string) => (v === "" ? null : v);
 
-type ExpenseFields = { amount: string; description: string; spent_on: string; project_id: string; paid_by_partner_id: string; category: string; reference: string; notes: string };
+type ExpenseFields = { amount: string; description: string; vendor: string; spent_on: string; project_id: string; paid_by_partner_id: string; category: string; reference: string; notes: string };
 type IncomeFields = { amount: string; received_on: string; project_id: string; received_by_partner_id: string; method: string; reference: string; notes: string };
 
 // `initial` prefills a new row (from a parsed document); `receiptPath` is a document that is already uploaded;
@@ -50,7 +50,7 @@ export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel, conte
   const me = useMe();
   const save = useSave("expenses");
   const [f, setF] = useState<ExpenseFields>({
-    amount: row?.amount?.toString() ?? "", description: row?.description ?? "", spent_on: row?.spent_on ?? today(),
+    amount: row?.amount?.toString() ?? "", description: row?.description ?? "", vendor: row?.vendor ?? "", spent_on: row?.spent_on ?? today(),
     project_id: row?.project_id ?? "", paid_by_partner_id: row?.paid_by_partner_id ?? "", category: row?.category ?? "",
     reference: row?.reference ?? "", notes: row?.notes ?? "", ...initial,
   });
@@ -64,7 +64,7 @@ export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel, conte
     await save.mutateAsync({
       id: row?.id,
       values: {
-        amount: Number(f.amount), description: f.description, spent_on: f.spent_on, project_id: nullIfEmpty(f.project_id),
+        amount: Number(f.amount), description: f.description, vendor: nullIfEmpty(f.vendor.trim()), spent_on: f.spent_on, project_id: nullIfEmpty(f.project_id),
         paid_by_partner_id: f.paid_by_partner_id, category: nullIfEmpty(f.category), reference: nullIfEmpty(f.reference),
         notes: nullIfEmpty(f.notes), receipt_path,
       },
@@ -76,7 +76,8 @@ export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel, conte
     <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
       <Field label="סכום (₪)"><Input required type="number" step="0.01" min="0.01" inputMode="decimal" value={f.amount} onChange={(e) => set("amount")(e.target.value)} /></Field>
       <Field label="תאריך"><Input required type="date" value={f.spent_on} onChange={(e) => set("spent_on")(e.target.value)} /></Field>
-      <div className="sm:col-span-2"><Field label="על מה"><Input required value={f.description} onChange={(e) => set("description")(e.target.value)} /></Field></div>
+      <Field label="על מה"><Input required value={f.description} onChange={(e) => set("description")(e.target.value)} /></Field>
+      <Field label="ספק"><Input list="expense-vendors" value={f.vendor} onChange={(e) => set("vendor")(e.target.value)} placeholder="Vercel, אופיס דיפו…" /><VendorList /></Field>
       <Field label="פרויקט"><ProjectPicker value={f.project_id} onChange={set("project_id")} {...context} /></Field>
       <Field label="מי שילמה"><PartnerSelect value={f.paid_by_partner_id} onChange={set("paid_by_partner_id")} /></Field>
       <Field label="קטגוריה"><Input list="expense-categories" value={f.category} onChange={(e) => set("category")(e.target.value)} placeholder="תוכנה, ציוד, נסיעות…" /><CategoryList /></Field>
@@ -139,6 +140,15 @@ function CategoryList() {
   const expenses = useExpenses();
   const cats = [...new Set((expenses.data ?? []).map((e) => e.category?.trim()).filter(Boolean))] as string[];
   return <datalist id="expense-categories">{cats.sort((a, b) => a.localeCompare(b, "he")).map((c) => <option key={c} value={c} />)}</datalist>;
+}
+
+// Vendors already used, most frequent first, so the same vendor is spelled the same way every time.
+function VendorList() {
+  const expenses = useExpenses();
+  const count = new Map<string, number>();
+  (expenses.data ?? []).forEach((e) => { const v = e.vendor?.trim(); if (v) count.set(v, (count.get(v) ?? 0) + 1); });
+  const vendors = [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "he")).map(([v]) => v);
+  return <datalist id="expense-vendors">{vendors.map((v) => <option key={v} value={v} />)}</datalist>;
 }
 
 function ReceiptInput({ hasExisting, file, setFile, label = "קבלה" }: { hasExisting: boolean; file: File | null; setFile: (f: File | null) => void; label?: string }) {
