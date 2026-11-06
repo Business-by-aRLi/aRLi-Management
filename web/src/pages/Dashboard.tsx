@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  useBusinessSummary, useExpenseSettlement, useExpenses, useIdeas, useIncome, useMeetings, useProjects, useRemove, useSave, useTasks, useTime, useWorkPlans,
+  useBusinessSummary, useExpenseSettlement, usePartnerSummary, usePartnerShares, useFinancials, useExpenses, useIdeas, useIncome, useMeetings, useProjects, useRemove, useSave, useTasks, useTime, useWorkPlans,
   type Idea, type WorkPlan,
 } from "../lib/data";
 import { money, today } from "../lib/format";
@@ -248,7 +248,75 @@ export function BalanceModule() {
           </div>
         </section>
       )}
+
+      <ProfitSplit />
     </Card>
+  );
+}
+
+// Overall profit split: each project's profit by its own split, minus each partner's half of the
+// business's general costs. Separate from the expense settlement above.
+function ProfitSplit() {
+  const summary = usePartnerSummary();
+  const shares = usePartnerShares();
+  const fin = useFinancials();
+  const biz = useBusinessSummary();
+  const [open, setOpen] = useState(false);
+  const rows = summary.data ?? [];
+  if (!rows.length || !biz.data) return null;
+  const showExpected = biz.data.outstanding > 0.005;
+  const projShare = (id: string, key: "amount" | "expected_amount") =>
+    (shares.data ?? []).filter((s) => s.partner_id === id).reduce((t, s) => t + Number(s[key]), 0);
+  const projects = (fin.data ?? []).filter((f) => Math.abs(f.profit) > 0.005 || (f.outstanding ?? 0) > 0.005);
+  const nameOf = (pid: string) => fin.data?.find((f) => f.project_id === pid)?.name ?? "";
+
+  return (
+    <section className="mt-6">
+      <h3 className="mb-1 text-[17px] font-semibold">חלוקת הרווח</h3>
+      <p className="mb-2 text-[13px] text-mute">רווח כל פרויקט לפי החלוקה שלו, פחות החצי של כל אחת מההוצאות הכלליות.</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {rows.map((r) => {
+          const fromProjects = projShare(r.partner_id, "amount");
+          return (
+            <div key={r.partner_id} className="rounded-2xl border border-[var(--line)] px-4 py-3 text-[14px]">
+              <p className="mb-1 text-[15px] font-medium">{r.name}</p>
+              <Line label="מהפרויקטים" value={fromProjects} />
+              <Line label="פחות חצי מההוצאות הכלליות" value={r.profit_share - fromProjects} />
+              <div className="mt-2 flex justify-between border-t border-[var(--line)] pt-2">
+                <span className="text-mute">אמורה לקבל מהרווח</span><Num className="font-medium">{money(r.profit_share)}</Num>
+              </div>
+              {showExpected && <Line label="לפי הצפי" value={r.expected_profit_share} />}
+            </div>
+          );
+        })}
+      </div>
+      <button type="button" className="mt-2 text-[13px] text-pink hover:text-pink-soft" onClick={() => setOpen(!open)}>
+        {open ? "הסתרת הפירוט לפי פרויקט" : "פירוט לפי פרויקט"}
+      </button>
+      {open && (
+        <div className="mt-2 overflow-x-auto rounded-2xl border border-[var(--line)] text-[13px]">
+          <table className="w-full">
+            <thead className="text-mute"><tr>
+              <th className="px-3 py-2 text-start font-normal">פרויקט</th><th className="px-3 py-2 text-start font-normal">רווח</th>
+              {rows.map((r) => <th key={r.partner_id} className="px-3 py-2 text-start font-normal">{r.name}</th>)}
+            </tr></thead>
+            <tbody>
+              {projects.map((f) => (
+                <tr key={f.project_id} className="border-t border-[var(--line)]">
+                  <td className="px-3 py-2">{nameOf(f.project_id)}</td>
+                  <td className="px-3 py-2"><Num>{money(f.profit)}</Num></td>
+                  {rows.map((r) => {
+                    const s = shares.data?.find((x) => x.project_id === f.project_id && x.partner_id === r.partner_id);
+                    return <td key={r.partner_id} className="px-3 py-2"><Num>{money(s?.amount ?? 0)}</Num>
+                      <span className="text-mute"> ({s?.fixed_amount != null ? "קבוע" : `${Number(s?.percent ?? 0)}%`})</span></td>;
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
