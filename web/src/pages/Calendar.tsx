@@ -562,7 +562,13 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
                   })()}
                   <div className="space-y-0.5">
                     {allDay.map((m) => (
-                      <button key={m.id} onClick={() => onOpen(m)} aria-label={`${KIND[m.kind].label}, כל היום: ${m.title}`} className={`press block w-full truncate rounded-[6px] px-1.5 py-0.5 text-start text-[12px] ${KIND[m.kind].cls}`}>{m.title}</button>
+                      <button key={m.id} onClick={() => onOpen(m)} aria-label={`${KIND[m.kind].label}, כל היום: ${m.title}`} className={`press block w-full truncate rounded-[6px] px-1.5 py-0.5 text-start text-[12px] ${KIND[m.kind].cls}`}>{lock(m)}{m.title}</button>
+                    ))}
+                    {busy.filter((b) => b.all_day && ymd(new Date(b.starts_at)) <= key && ymd(new Date(new Date(b.ends_at).getTime() - 1)) >= key).map((b, i) => (
+                      <div key={`b${i}`} className="truncate rounded-[6px] px-1.5 py-0.5 text-[12px]"
+                        style={{ background: `color-mix(in srgb, ${whoColor(b.partner_id, partners)} 16%, transparent)`, color: `color-mix(in srgb, ${whoColor(b.partner_id, partners)} 70%, var(--bone))` }}>
+                        {busyLabel(b, partners)}
+                      </div>
                     ))}
                     {hol.map((h) => <HolidayLine key={h.name} h={h} />)}
                     {rit.map((r) => <div key={r.id} className="flex items-center gap-1 truncate text-[12px] text-mute"><Icon name="rhythm" size={12} className="shrink-0" /><span className="truncate">{r.title}</span></div>)}
@@ -582,7 +588,7 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
                 const key = ymd(d);
                 const placed = layoutDay(events.filter((m) => !m.all_day && ymd(new Date(m.starts_at)) === key), d);
                 const base = new Date(d); base.setHours(FIRST_H, 0, 0, 0);
-                const dayBusy = busy.filter((b) => ymd(new Date(b.starts_at)) === key || ymd(new Date(b.ends_at)) === key);
+                const dayBusy = busy.filter((b) => !b.all_day && (ymd(new Date(b.starts_at)) === key || ymd(new Date(b.ends_at)) === key));
                 const nowTop = key === todayKey ? ((now.getTime() - base.getTime()) / 3600e3) * HOUR_PX : -1;
                 // Time already behind us today, and days already gone, sit under a quiet veil so the eye goes forward.
                 const pastH = key < todayKey ? hours.length * HOUR_PX : key === todayKey ? Math.max(0, Math.min(hours.length * HOUR_PX, nowTop)) : 0;
@@ -603,13 +609,12 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
                       const s = Math.max(new Date(b.starts_at).getTime(), base.getTime());
                       const e = Math.min(new Date(b.ends_at).getTime(), base.getTime() + hours.length * 3600e3);
                       if (e <= s) return null;
-                      const name = partners.find((p) => p.id === b.partner_id)?.name ?? "";
                       const c = whoColor(b.partner_id, partners);
                       return (
                         <div key={i} className="pointer-events-none absolute inset-x-0.5 overflow-hidden rounded-[6px] px-1.5 pt-0.5 text-[12px] font-medium leading-tight"
                           style={{ top: ((s - base.getTime()) / 3600e3) * HOUR_PX, height: ((e - s) / 3600e3) * HOUR_PX,
                             background: `color-mix(in srgb, ${c} 16%, transparent)`, color: `color-mix(in srgb, ${c} 70%, var(--bone))`,
-                            boxShadow: `inset -3px 0 0 ${c}, inset 0 0 0 1px color-mix(in srgb, ${c} 30%, transparent)` }}>{name} · ביומן האישי</div>
+                            boxShadow: `inset -3px 0 0 ${c}, inset 0 0 0 1px color-mix(in srgb, ${c} 30%, transparent)` }}>{busyLabel(b, partners)}</div>
                       );
                     })}
                     {placed.map(({ m, top, height, col, cols }) => {
@@ -631,7 +636,7 @@ function WeekGrid({ days, events, busy, deadlines, rituals, partners, onSlot, on
                             transform: dragging ? `translate(${drag!.dx}px, ${drag!.dy}px)` : undefined,
                           }}>
                           <div className="flex items-start justify-between gap-1">
-                            <span className="truncate font-semibold">{m.title}</span>
+                            <span className="truncate font-semibold">{lock(m)}{m.title}</span>
                             {ini && <span className="hidden shrink-0 text-[11px] opacity-80 sm:inline">{ini}</span>}
                           </div>
                           {height > 34 && <div className={`truncate opacity-80 ${single ? "" : "hidden sm:block"}`}><Num>{hm(m.starts_at)}</Num>{m.meet_link ? " · Meet" : m.location ? ` · ${m.location}` : ""}</div>}
@@ -715,7 +720,7 @@ function MonthGrid({ from, month, events, deadlines, rituals, onDay, onOpen }: {
                 {hol.slice(0, 1).map((h) => <HolidayLine key={h.name} h={h} />)}
                 {list.slice(0, 3).map((m) => (
                   <button key={m.id} onClick={(e) => { e.stopPropagation(); onOpen(m); }} aria-label={`${KIND[m.kind].label}: ${m.title}${m.all_day ? ", כל היום" : `, ${hm(m.starts_at)}`}`} className={`block w-full truncate rounded-[5px] px-1 text-start text-[12px] ${KIND[m.kind].cls}`}>
-                    {!m.all_day && <Num className="me-1 opacity-85">{hm(m.starts_at)}</Num>}{m.title}
+                    {!m.all_day && <Num className="me-1 opacity-85">{hm(m.starts_at)}</Num>}{lock(m)}{m.title}
                   </button>
                 ))}
                 {list.length > 3 && <div className="text-[12px] text-mute">+{list.length - 3}</div>}
@@ -737,6 +742,14 @@ function MonthGrid({ from, month, events, deadlines, rituals, onDay, onOpen }: {
 }
 
 // ---------- agenda ----------
+// Private events and my personal Google events carry a lock: only I see them.
+const lock = (m: Meeting) => (m.is_private ? "🔒 " : "");
+function busyLabel(b: Busy, partners: Partner[]) {
+  if (b.title) return `🔒 ${b.title}`;
+  const name = partners.find((p) => p.id === b.partner_id)?.name ?? "";
+  return b.all_day ? `${name} · לא זמינה` : `${name} · תפוסה`;
+}
+
 function Agenda({ from, days, events, deadlines, rituals, partners, onOpen, onNew }: {
   from: Date; days: number; events: Meeting[]; deadlines: Task[]; rituals: { id: string; title: string; on: string }[]; partners: Partner[];
   onOpen: (m: Meeting) => void; onNew: (d: Date) => void;
@@ -765,7 +778,7 @@ function Agenda({ from, days, events, deadlines, rituals, partners, onOpen, onNe
                 <button key={m.id} onClick={() => onOpen(m)} className="press flex w-full items-center gap-3 rounded-[10px] px-2 py-2 text-start hover:bg-[var(--hover-veil)]">
                   <span className={`grid size-8 shrink-0 place-items-center rounded-[8px] ${KIND[m.kind].cls}`}><Icon name={KIND[m.kind].icon} size={16} /></span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate">{m.title}</span>
+                    <span className="block truncate">{lock(m)}{m.title}</span>
                     <span className="block truncate text-[13px] text-mute">
                       {m.all_day ? "כל היום" : <Num>{`${hm(m.starts_at)}–${hm(endOf(m))}`}</Num>}
                       {m.partner_ids?.length ? ` · ${m.partner_ids.map((id) => partners.find((p) => p.id === id)?.name).join(", ")}` : ""}
