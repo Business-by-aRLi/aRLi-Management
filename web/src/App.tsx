@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
 import { usePartners } from "./lib/data";
@@ -24,6 +24,7 @@ import LeadPage from "./pages/LeadPage";
 import QuoteEditor from "./pages/QuoteEditor";
 // The client's quote page needs no sign-in and none of the app around it.
 const PublicQuote = lazy(() => import("./pages/PublicQuote"));
+import Connections from "./pages/Connections";
 
 // Order follows daily use: plan first (home, tasks, calendar), then the books.
 const LINKS: [string, string, IconName][] = [
@@ -32,7 +33,7 @@ const LINKS: [string, string, IconName][] = [
 ];
 // On a phone the tab bar holds four places and the "+"; the rest live under "עוד".
 const PHONE_TABS = [LINKS[0], LINKS[1], LINKS[3]];
-const PHONE_MORE = [LINKS[2], LINKS[4], LINKS[5], LINKS[6], LINKS[7]];
+const PHONE_MORE: typeof LINKS = [LINKS[2], LINKS[4], LINKS[5], LINKS[6], LINKS[7], ["/connections", "חיבורים", "link"]];
 
 export default function App() {
   const { pathname } = useLocation();
@@ -71,6 +72,7 @@ function Shell({ email }: { email: string }) {
   const [more, setMore] = useState(false);
   const theme = useTheme();
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   useEffect(() => { window.scrollTo(0, 0); }, [pathname]);
   const moreActive = PHONE_MORE.some(([to]) => pathname.startsWith(to));
   if (partners.isLoading) return <Loading />;
@@ -98,6 +100,7 @@ function Shell({ email }: { email: string }) {
           </NavLink>
         ))}
         <Button className="!py-1.5 !px-4 ms-1 text-[15px]" onClick={() => setAdding(true)}><Icon name="plus" size={17} />חדש</Button>
+        <IconButton icon="link" label="חיבורים לספקים" onClick={() => navigate("/connections")} aria-current={pathname === "/connections" ? "page" : undefined} />
         <IconButton icon={theme.resolved === "light" ? "moon" : "sun"} label={theme.resolved === "light" ? "מעבר למצב כהה" : "מעבר למצב בהיר"} onClick={theme.toggle} aria-pressed={theme.resolved === "light"} />
         <IconButton icon="logout" label="יציאה" onClick={() => setAskLogout(true)} />
       </nav>
@@ -159,6 +162,7 @@ function Shell({ email }: { email: string }) {
           <Route path="/leads/:id" element={<LeadPage />} />
           <Route path="/quotes/new" element={<QuoteEditor />} />
           <Route path="/quotes/:id" element={<QuoteEditor />} />
+          <Route path="/connections" element={<Connections />} />
         </Routes>
       </main>
     </div>
