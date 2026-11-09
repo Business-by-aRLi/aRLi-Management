@@ -8,8 +8,9 @@
 // "<userkey>:<secret>". Fallback: Edge Function secrets YESH_USERKEY + YESH_SECRET.
 // Yesh Invoice takes the key as a JSON object in the Authorization header: {"secret":"…","userkey":"…"}.
 //
-// Only documents that record money received become income (receipt, tax invoice-receipt). Each document is inserted once (source + external_id); rows already in the app are never
-// overwritten, so a client or project assigned by hand stays.
+// Only documents that record money received become income (receipt, tax invoice-receipt). Each
+// document is inserted once (source + external_id); rows already in the app are never overwritten,
+// so a client or project assigned by hand stays.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
