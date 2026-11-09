@@ -8,8 +8,7 @@
 // "<userkey>:<secret>". Fallback: Edge Function secrets YESH_USERKEY + YESH_SECRET.
 // Yesh Invoice takes the key as a JSON object in the Authorization header: {"secret":"…","userkey":"…"}.
 //
-// Only documents that record money received become income (receipt, tax invoice-receipt, donation
-// receipt). Each document is inserted once (source + external_id); rows already in the app are never
+// Only documents that record money received become income (receipt, tax invoice-receipt). Each document is inserted once (source + external_id); rows already in the app are never
 // overwritten, so a client or project assigned by hand stays.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
@@ -21,9 +20,11 @@ const env = (k: string) => Deno.env.get(k) ?? "";
 const API = "https://api.yeshinvoice.co.il/api/v1/";
 const DOCS_PATH = "getInvoices";        // Documents - View › View Documents
 const CUSTOMERS_PATH = "getAllCustomers"; // Customers › View
-// Document types that mean money came in. Overridable from the connector's extra.doc_types ("4,9").
-const MONEY_IN_TYPES = [4, 9, 11];
-const TYPE_NAME: Record<number, string> = { 4: "קבלה", 9: "חשבונית מס קבלה", 11: "קבלה על תרומה" };
+// Document types that mean money came in: 6 receipt, 9 tax invoice/receipt. Not 2 order, 5 proforma or
+// 8 tax invoice (an invoice alone is a demand; when it is paid, a receipt is issued for it).
+// Overridable from the connector's extra.doc_types ("6,9").
+const MONEY_IN_TYPES = [6, 9];
+const TYPE_NAME: Record<number, string> = { 6: "קבלה", 9: "חשבונית מס קבלה" };
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
