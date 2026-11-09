@@ -110,19 +110,23 @@ function IncomeList({ onEdit }: { onEdit: (r: Income) => void }) {
   const rows = useMemo(() => (data ?? []).filter((r) =>
     (!projectId || (projectId === "none" ? !r.project_id : r.project_id === projectId)) &&
     (!partnerId || r.received_by_partner_id === partnerId) && (!month || r.received_on.startsWith(month))), [data, projectId, partnerId, month]);
+  const toAssign = (data ?? []).filter((r) => r.source === "yeshinvoice" && !r.client_id).length;
   if (isLoading) return <Loading />;
   if (error) return <ErrorNote error={error} />;
   return (
     <Card>
       <Filters {...{ projectId, setProjectId, partnerId, setPartnerId, month, setMonth }} />
       <Total rows={rows} />
+      {!!toAssign && <p className="mb-2 text-[14px] text-mute">{toAssign} קבלות מיש חשבונית מחכות לשיוך ללקוח. לוחצים על השורה ובוחרים פרויקט, ושאר הקבלות של אותו לקוח ישויכו לבד.</p>}
       {!rows.length && <Empty>עוד אין הכנסות רשומות.</Empty>}
       {rows.map((r) => (
         <Row key={r.id} date={r.received_on} amount={r.amount} positive onEdit={() => onEdit(r)}
-          title={r.projects?.name ?? "בלי פרויקט"}
-          meta={<>התקבל אצל {r.partners?.name ?? "?"}{r.method ? ` · ${r.method}` : ""}</>}
+          title={r.projects?.name ?? r.clients?.name ?? r.customer_name ?? "בלי פרויקט"}
+          meta={<>{r.source === "yeshinvoice" && !r.client_id && <span className="text-pink">לשיוך · </span>}
+            התקבל אצל {r.partners?.name ?? "?"}{r.source === "yeshinvoice" ? ` · ${r.reference ?? "יש חשבונית"}` : r.method ? ` · ${r.method}` : ""}</>}
           actions={<>
             {r.receipt_path && <IconButton icon="receipt" label="פתיחת המסמך" onClick={async () => { const u = await receiptUrl(r.receipt_path!); if (u) window.open(u, "_blank"); }} />}
+            {!r.receipt_path && r.pdf_url && <IconButton icon="receipt" label="פתיחת הקבלה ביש חשבונית" onClick={() => window.open(r.pdf_url!, "_blank", "noopener")} />}
             <IconButton icon="trash" label="מחיקת ההכנסה" onClick={async () => (await confirm({ title: "למחוק את ההכנסה?", body: money(r.amount) })) && remove.mutate(r.id)} />
           </>} />
       ))}

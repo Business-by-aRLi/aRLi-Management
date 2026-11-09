@@ -2,7 +2,7 @@
 // stored encrypted in the database (Supabase Vault) and never shown again; the app sees only its status.
 import { useRef, useState } from "react";
 import {
-  useConnectorActions, useConnectors, useInfraSync, useInvoiceImports, useProviderResources, useSupabaseInvoiceUpload, type Connector,
+  useConnectorActions, useConnectors, useInfraSync, useInvoiceImports, useInvoiceSync, useProviderResources, useSupabaseInvoiceUpload, type Connector,
 } from "../lib/data";
 import { dateTime } from "../lib/format";
 import { Button, Card, Field, Input, Loading, Modal, PageTitle, Pill, useConfirm } from "../components/ui";
@@ -39,7 +39,7 @@ export default function Connections() {
       <PageTitle eyebrow="הגדרות" title="חיבורים"
         action={byProvider.size > 0 && <Button variant="ghost" disabled={sync.isPending} onClick={() => sync.mutate({ gmail: true, history: true })}>{sync.isPending ? "מסנכרנת…" : "סנכרון כל ההיסטוריה"}</Button>} />
       <p className="max-w-[640px] text-mute">
-        מחברים ספק פעם אחת, ומעכשיו העלויות שלו נמשכות כל בוקר לכרטיס "תשתיות" בכל פרויקט. המפתח נשמר מוצפן ולא מוצג שוב.
+        מחברים פעם אחת, והנתונים נמשכים לבד: קבלות מיש חשבונית להכנסות, ועלויות הספקים לכרטיס "תשתיות" בכל פרויקט. המפתח נשמר מוצפן ולא מוצג שוב.
       </p>
       {sync.data && (
         <p className="text-[14px] text-mute">{Object.values(sync.data.report).join(" · ") || "אין שירותים משויכים לסנכרון"}
@@ -48,6 +48,7 @@ export default function Connections() {
       {sync.error && <p className="text-[14px] text-error">{(sync.error as Error).message}</p>}
 
       <div className="grid gap-5 md:grid-cols-2">
+        <YeshInvoiceCard conn={byProvider.get("yeshinvoice")} />
         {Object.entries(CONNECTORS).map(([id, info]) => (
           <ConnectorCard key={id} id={id} info={info} conn={byProvider.get(id)} onConnect={() => setOpen(id)}>
             {id === "supabase" && <SupabaseInvoices />}
@@ -172,6 +173,78 @@ function ConnectForm({ id, info, conn, onDone }: { id: string; info: Info; conn?
       <div className="flex gap-3">
         <Button disabled={save.isPending || key.trim().length < 8}>{save.isPending ? "שומרת…" : "שמירה"}</Button>
         <Button type="button" variant="quiet" onClick={onDone}>ביטול</Button>
+      </div>
+    </form>
+  );
+}
+
+// Yesh Invoice (יש חשבונית): every receipt issued there becomes income, matched to its client and project.
+function YeshInvoiceCard({ conn }: { conn?: Connector }) {
+  const { remove } = useConnectorActions();
+  const sync = useInvoiceSync();
+  const confirm = useConfirm();
+  const [open, setOpen] = useState(false);
+  const status = !conn ? null : conn.check_ok === false ? "error" : "ok";
+  return (
+    <Card>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-[22px] font-semibold">יש חשבונית</h2>
+        {!conn ? <Pill>לא מחובר</Pill> : status === "error" ? <span className="text-[14px] text-error">שגיאה בחיבור</span> : <Pill tone="pink">מחובר</Pill>}
+      </div>
+      <p className="mt-2 text-mute">כל קבלה שיוצאת ללקוח נכנסת להכנסות, משויכת ללקוח ולפרויקט ונספרת אצל מי שחיברה את החשבון. מתעדכן כל 3 שעות.</p>
+      {conn && (
+        <div className="mt-4 space-y-1 border-t border-[var(--line)] pt-3 text-[14px] text-mute">
+          <div>מפתח <bdi dir="ltr">{conn.key_hint}</bdi>{conn.partners?.name ? ` · חוברה ע״י ${conn.partners.name}` : ""} · {dateTime(conn.connected_at)}</div>
+          {conn.checked_at && <div className={conn.check_ok === false ? "text-error" : ""}>בדיקה אחרונה {dateTime(conn.checked_at)}: {conn.check_message}</div>}
+          {sync.data?.report && <div>{sync.data.report}</div>}
+          {sync.data?.customers != null && <div>החיבור עובד: נמצאו {sync.data.customers} לקוחות.</div>}
+          {sync.error && <div className="text-error">{(sync.error as Error).message}</div>}
+        </div>
+      )}
+      <div className="mt-5 flex flex-wrap items-center gap-3">
+        <Button variant={conn ? "ghost" : "primary"} onClick={() => setOpen(true)}>{conn ? "החלפת מפתח" : "חיבור"}</Button>
+        {conn && <Button variant="quiet" disabled={sync.isPending} onClick={() => sync.mutate({})}>{sync.isPending ? "מסנכרנת…" : "סנכרון עכשיו"}</Button>}
+        {conn && (
+          <button type="button" className="ms-auto text-[14px] text-mute hover:text-error" disabled={remove.isPending} onClick={async () => {
+            if (!(await confirm({ title: "לנתק את יש חשבונית?", body: "המפתח יימחק. ההכנסות שכבר נמשכו נשארות.", yes: "כן, לנתק" }))) return;
+            remove.mutate("yeshinvoice");
+          }}>ניתוק</button>
+        )}
+      </div>
+      <Modal open={open} onClose={() => setOpen(false)} title="חיבור יש חשבונית">
+        {open && <YeshInvoiceForm conn={conn} onDone={() => { setOpen(false); sync.mutate({}); }} onCancel={() => setOpen(false)} />}
+      </Modal>
+    </Card>
+  );
+}
+
+function YeshInvoiceForm({ conn, onDone, onCancel }: { conn?: Connector; onDone: () => void; onCancel: () => void }) {
+  const { save } = useConnectorActions();
+  const [userkey, setUserkey] = useState("");
+  const [secret, setSecret] = useState("");
+  const ok = userkey.trim().length >= 4 && secret.trim().length >= 8;
+  return (
+    <form className="space-y-4" onSubmit={async (e) => {
+      e.preventDefault();
+      try {
+        // stored as one encrypted value; the hint shows the end of the secret
+        await save.mutateAsync({ provider: "yeshinvoice", key: `${userkey.trim()}:${secret.trim()}`, extra: {} });
+        onDone();
+      } catch { /* shown below */ }
+    }}>
+      <p className="text-mute">
+        ביש חשבונית: הגדרות › מפתחות API. מעתיקים את שני הערכים ומדביקים כאן. הם נשמרים מוצפנים ולא מוצגים שוב.
+      </p>
+      <Field label="UserKey">
+        <Input dir="ltr" type="password" autoComplete="off" required value={userkey} onChange={(e) => setUserkey(e.target.value)} placeholder={conn ? `מחליף את ${conn.key_hint}` : ""} />
+      </Field>
+      <Field label="Secret">
+        <Input dir="ltr" type="password" autoComplete="off" required value={secret} onChange={(e) => setSecret(e.target.value)} />
+      </Field>
+      {save.error && <p className="text-[14px] text-error">{(save.error as Error).message}</p>}
+      <div className="flex gap-3">
+        <Button disabled={save.isPending || !ok}>{save.isPending ? "שומרת…" : "שמירה וסנכרון"}</Button>
+        <Button type="button" variant="quiet" onClick={onCancel}>ביטול</Button>
       </div>
     </form>
   );

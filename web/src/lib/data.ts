@@ -20,7 +20,9 @@ export type Expense = {
 export type Income = {
   id: string; received_on: string; amount: number; method: string | null; notes: string | null;
   reference: string | null; receipt_path: string | null; project_id: string | null; client_id?: string | null; received_by_partner_id: string | null;
-  projects?: { name: string } | null; partners?: { name: string } | null;
+  // synced from Yesh Invoice: source "yeshinvoice", the name on the receipt and its PDF
+  source?: string; customer_name?: string | null; pdf_url?: string | null;
+  projects?: { name: string } | null; partners?: { name: string } | null; clients?: { name: string } | null;
 };
 export type Settlement = { id: string; settled_on: string; amount: number; from_partner_id: string; to_partner_id: string; notes: string | null };
 export type Task = {
@@ -64,7 +66,7 @@ export const useShares = () => q<Share[]>(["shares"], () => supabase.from("proje
 export const useExpenses = () => q<Expense[]>(["expenses"], () =>
   supabase.from("expenses").select("*,projects(name),partners(name)").order("spent_on", { ascending: false }).limit(500));
 export const useIncome = () => q<Income[]>(["income"], () =>
-  supabase.from("income").select("*,projects(name),partners(name)").order("received_on", { ascending: false }).limit(500));
+  supabase.from("income").select("*,projects(name),partners(name),clients(name)").order("received_on", { ascending: false }).limit(500));
 export const useSettlements = () => q<Settlement[]>(["settlements"], () =>
   supabase.from("settlements").select("*").order("settled_on", { ascending: false }));
 export const useRecurring = () => q<RecurringCost[]>(["recurring"], () => supabase.from("recurring_costs").select("*").order("name"));
@@ -202,6 +204,20 @@ export function useSupabaseInvoiceUpload() {
       return data as { month: string; matched: number; unmatched: { name: string; amount: number }[] };
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["infra"] }),
+  });
+}
+
+// Receipts from Yesh Invoice (invoice-sync function). test: check the key only.
+export function useInvoiceSync() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (opts?: { full?: boolean; test?: boolean }) => {
+      const { data, error } = await supabase.functions.invoke("invoice-sync", { body: opts?.test ? { action: "test" } : { full: !!opts?.full } });
+      if (error) throw new Error(error.message);
+      if (!data?.ok) throw new Error(data?.error ?? "הסנכרון נכשל");
+      return data as { ok: true; report?: string; customers?: number };
+    },
+    onSuccess: () => qc.invalidateQueries(), // income feeds the balances, projects and clients too
   });
 }
 
