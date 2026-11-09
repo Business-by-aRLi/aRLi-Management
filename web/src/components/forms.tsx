@@ -6,6 +6,7 @@ import { today } from "../lib/format";
 import { uploadReceipt, useExpenses, usePartners, useProjects, useSave, type Expense, type Income, type Task, type Meeting, type MeetingKind } from "../lib/data";
 import { Button, Field, Input, Segmented, Select, Textarea } from "./ui";
 import { currentQuarter, PlanPicker, ProjectPicker } from "./Pickers";
+import { ClientPicker, resolveClient, type ClientChoice } from "./ClientPicker";
 
 // The partner who is signed in, used as the default payer/receiver/assignee.
 export function useMe() {
@@ -101,13 +102,17 @@ export function IncomeForm({ row, onDone, initial, receiptPath, onCancel, contex
     notes: row?.notes ?? "", ...initial,
   });
   const [file, setFile] = useState<File | null>(null);
+  // A receipt synced from Yesh Invoice can be tied to a client directly, even one without a project yet.
+  const synced = row?.source === "yeshinvoice";
+  const [client, setClient] = useState<ClientChoice>({ id: row?.client_id ?? "", newName: row?.customer_name ?? "" });
   useEffect(() => { if (!f.received_by_partner_id && me) setF((s) => ({ ...s, received_by_partner_id: me.id })); }, [me]);
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     // The payer is the project's client; without a project, the client page we came from (or the one already saved).
-    const client_id = projects.data?.find((p) => p.id === f.project_id)?.client_id ?? context?.clientId ?? row?.client_id ?? null;
+    const client_id = projects.data?.find((p) => p.id === f.project_id)?.client_id
+      ?? (synced ? await resolveClient(client) : context?.clientId ?? row?.client_id ?? null);
     const receipt_path = file ? await uploadReceipt(file) : receiptPath ?? row?.receipt_path ?? null;
     await save.mutateAsync({
       id: row?.id,
@@ -124,7 +129,9 @@ export function IncomeForm({ row, onDone, initial, receiptPath, onCancel, contex
     <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
       <Field label="סכום (₪)"><Input required type="number" step="0.01" min="0.01" inputMode="decimal" value={f.amount} onChange={(e) => set("amount")(e.target.value)} /></Field>
       <Field label="תאריך"><Input required type="date" value={f.received_on} onChange={(e) => set("received_on")(e.target.value)} /></Field>
+      {synced && row?.customer_name && <p className="text-[14px] text-mute sm:col-span-2">מיש חשבונית · {row.reference} · על שם {row.customer_name}</p>}
       <Field label="פרויקט"><ProjectPicker value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" {...context} /></Field>
+      {synced && !projects.data?.find((p) => p.id === f.project_id)?.client_id && <Field label="לקוח"><ClientPicker value={client} onChange={setClient} /></Field>}
       <Field label="מי קיבלה"><PartnerSelect value={f.received_by_partner_id} onChange={set("received_by_partner_id")} /></Field>
       <Field label="אמצעי תשלום"><Input value={f.method} onChange={(e) => set("method")(e.target.value)} placeholder="העברה, ביט, צ׳ק…" /></Field>
       <Field label="אסמכתה"><Input value={f.reference} onChange={(e) => set("reference")(e.target.value)} /></Field>
