@@ -10,7 +10,7 @@
 //
 // Only documents that record money received become income (receipt, tax invoice-receipt). Each
 // document is inserted once (source + external_id); rows already in the app are never overwritten,
-// so a client or project assigned by hand stays.
+// so a client or project assigned by hand stays. A receipt deleted in the app is never brought back.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
@@ -140,7 +140,9 @@ Deno.serve(async (req) => {
 
     const ids = docs.map((d) => `${d.DocumentType}-${d.DocumentNumber}`);
     const { data: have } = await db.from("income").select("external_id").eq("source", "yeshinvoice").in("external_id", ids.length ? ids : ["-"]);
-    const known = new Set((have ?? []).map((r) => r.external_id));
+    // receipts already in the app, or deleted there on purpose (income_dismissed)
+    const { data: gone } = await db.from("income_dismissed").select("external_id").eq("source", "yeshinvoice").in("external_id", ids.length ? ids : ["-"]);
+    const known = new Set([...(have ?? []), ...(gone ?? [])].map((r) => r.external_id));
 
     const { data: clients } = await db.from("clients").select("id,name,yesh_customer_id");
     const { data: projects } = await db.from("projects").select("id,client_id,status");
