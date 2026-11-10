@@ -25,15 +25,16 @@ import QuoteEditor from "./pages/QuoteEditor";
 // The client's quote page needs no sign-in and none of the app around it.
 const PublicQuote = lazy(() => import("./pages/PublicQuote"));
 import Connections from "./pages/Connections";
+import Books from "./pages/Books";
 
 // Order follows daily use: plan first (home, tasks, calendar), then the books.
 const LINKS: [string, string, IconName][] = [
   ["/", "בית", "home"], ["/tasks", "משימות", "tasks"], ["/calendar", "יומן", "calendar"],
-  ["/leads", "לידים", "leads"], ["/projects", "פרויקטים", "projects"], ["/clients", "לקוחות", "clients"], ["/money", "כספים", "money"], ["/time", "זמן", "time"],
+  ["/leads", "לידים", "leads"], ["/projects", "פרויקטים", "projects"], ["/clients", "לקוחות", "clients"], ["/money", "כספים", "money"], ["/books", "חשבונות", "receipt"], ["/time", "זמן", "time"],
 ];
 // On a phone the tab bar holds four places and the "+"; the rest live under "עוד".
 const PHONE_TABS = [LINKS[0], LINKS[1], LINKS[3]];
-const PHONE_MORE: typeof LINKS = [LINKS[2], LINKS[4], LINKS[5], LINKS[6], LINKS[7], ["/connections", "חיבורים", "link"]];
+const PHONE_MORE: typeof LINKS = [LINKS[2], LINKS[4], LINKS[5], LINKS[6], LINKS[7], LINKS[8], ["/connections", "חיבורים", "link"]];
 
 export default function App() {
   const { pathname } = useLocation();
@@ -150,6 +151,7 @@ function Shell({ email }: { email: string }) {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/money" element={<Money />} />
+          <Route path="/books" element={<Books />} />
           <Route path="/projects" element={<Projects />} />
           <Route path="/projects/:id" element={<ProjectPage />} />
           <Route path="/clients" element={<Clients />} />

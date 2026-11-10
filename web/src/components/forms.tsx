@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
-import { uploadReceipt, useExpenses, usePartners, useProjects, useSave, type Expense, type Income, type Task, type Meeting, type MeetingKind } from "../lib/data";
+import { uploadReceipt, useExpenses, usePartners, useProjects, useSave, useTaxProfile, type Expense, type VatDoc, type Income, type Task, type Meeting, type MeetingKind } from "../lib/data";
 import { Button, Field, Input, Segmented, Select, Textarea } from "./ui";
 import { currentQuarter, PlanPicker, ProjectPicker } from "./Pickers";
 import { ClientPicker, resolveClient, type ClientChoice } from "./ClientPicker";
@@ -37,7 +37,11 @@ function Actions({ pending, error, onCancel }: { pending: boolean; error: unknow
 
 const nullIfEmpty = (v: string) => (v === "" ? null : v);
 
-type ExpenseFields = { amount: string; description: string; vendor: string; spent_on: string; project_id: string; paid_by_partner_id: string; category: string; reference: string; notes: string };
+type ExpenseFields = {
+  amount: string; description: string; vendor: string; spent_on: string; project_id: string; paid_by_partner_id: string; category: string; reference: string; notes: string;
+  // input VAT, once the business is עוסק מורשה
+  vat_doc: VatDoc | ""; vat_amount: string; vat_claim_pct: string; is_asset: boolean; allocation_number: string; supplier_tax_id: string;
+};
 type IncomeFields = { amount: string; received_on: string; project_id: string; received_by_partner_id: string; method: string; reference: string; notes: string };
 
 // `initial` prefills a new row (from a parsed document); `receiptPath` is a document that is already uploaded;
@@ -53,9 +57,15 @@ export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel, conte
   const [f, setF] = useState<ExpenseFields>({
     amount: row?.amount?.toString() ?? "", description: row?.description ?? "", vendor: row?.vendor ?? "", spent_on: row?.spent_on ?? today(),
     project_id: row?.project_id ?? "", paid_by_partner_id: row?.paid_by_partner_id ?? "", category: row?.category ?? "",
-    reference: row?.reference ?? "", notes: row?.notes ?? "", ...initial,
+    reference: row?.reference ?? "", notes: row?.notes ?? "",
+    vat_doc: row?.vat_doc ?? "", vat_amount: row?.vat_amount?.toString() ?? "", vat_claim_pct: String(row?.vat_claim_pct ?? 100),
+    is_asset: row?.is_asset ?? false, allocation_number: row?.allocation_number ?? "", supplier_tax_id: row?.supplier_tax_id ?? "", ...initial,
   });
   const [file, setFile] = useState<File | null>(null);
+  const tax = useTaxProfile().data;
+  // The VAT part shows only for expenses from the day the business became מורשה.
+  const showVat = !!tax && tax.vat_status === "licensed" && f.spent_on >= tax.licensed_from;
+  const rate = Number(tax?.vat_rate ?? 18);
   useEffect(() => { if (!f.paid_by_partner_id && me) setF((s) => ({ ...s, paid_by_partner_id: me.id })); }, [me]);
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
 
@@ -68,6 +78,12 @@ export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel, conte
         amount: Number(f.amount), description: f.description, vendor: nullIfEmpty(f.vendor.trim()), spent_on: f.spent_on, project_id: nullIfEmpty(f.project_id),
         paid_by_partner_id: f.paid_by_partner_id, category: nullIfEmpty(f.category), reference: nullIfEmpty(f.reference),
         notes: nullIfEmpty(f.notes), receipt_path,
+        ...(showVat || row?.vat_doc ? {
+          vat_doc: nullIfEmpty(f.vat_doc),
+          vat_amount: f.vat_doc === "tax_invoice" ? (f.vat_amount === "" ? Math.round(Number(f.amount) * rate / (100 + rate) * 100) / 100 : Number(f.vat_amount)) : f.vat_doc === "no_vat" ? 0 : null,
+          vat_claim_pct: Number(f.vat_claim_pct) || 0, is_asset: f.is_asset,
+          allocation_number: nullIfEmpty(f.allocation_number.trim()), supplier_tax_id: nullIfEmpty(f.supplier_tax_id.trim()),
+        } : {}),
       },
     });
     onDone();
@@ -84,9 +100,51 @@ export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel, conte
       <Field label="קטגוריה"><Input list="expense-categories" value={f.category} onChange={(e) => set("category")(e.target.value)} placeholder="תוכנה, ציוד, נסיעות…" /><CategoryList /></Field>
       <Field label="אסמכתה"><Input value={f.reference} onChange={(e) => set("reference")(e.target.value)} /></Field>
       <div className="sm:col-span-2"><Field label="הערות"><Input value={f.notes} onChange={(e) => set("notes")(e.target.value)} /></Field></div>
+      {showVat && <VatFields f={f} setF={setF} rate={rate} />}
       {!receiptPath && <div className="sm:col-span-2"><ReceiptInput hasExisting={!!row?.receipt_path} file={file} setFile={setFile} /></div>}
       <div className="sm:col-span-2"><Actions pending={save.isPending} error={save.error} onCancel={onCancel ?? onDone} /></div>
     </form>
+  );
+}
+
+// Input VAT: only a tax invoice in the business's name lets the business claim its VAT.
+function VatFields({ f, setF, rate }: { f: ExpenseFields; setF: (v: ExpenseFields) => void; rate: number }) {
+  const auto = Math.round(Number(f.amount || 0) * rate / (100 + rate) * 100) / 100;
+  return (
+    <fieldset className="sm:col-span-2 grid gap-4 rounded-[20px] p-4 shadow-[inset_0_0_0_1px_var(--line)] sm:grid-cols-2">
+      <legend className="px-2 text-[15px] font-medium text-pink">מע״מ</legend>
+      <div className="sm:col-span-2">
+        <Segmented<VatDoc | "">
+          label="סוג המסמך" value={f.vat_doc} onChange={(v) => setF({ ...f, vat_doc: v })}
+          options={[["tax_invoice", "חשבונית מס"], ["no_vat", "בלי מע״מ"], ["", "לא בדקתי"]]} />
+        <p className="mt-2 text-[13px] text-mute-2">
+          {f.vat_doc === "no_vat" ? "ספק מחו״ל (Vercel, OpenAI…), עוסק פטור, קבלה בלבד, או חשבונית שלא על שם העסק."
+            : f.vat_doc === "tax_invoice" ? "חשבונית מס על שם העסק ועם מספר העוסק. את המע״מ שבה מקזזים בדוח."
+            : "אפשר להשלים אחר כך במסך הנהלת חשבונות."}
+        </p>
+      </div>
+      {f.vat_doc === "tax_invoice" && <>
+        <Field label="מע״מ בחשבונית (₪)" hint={`ריק = ${auto.toLocaleString("he-IL")} ₪ (${rate}% מתוך הסכום)`}>
+          <Input type="number" step="0.01" min="0" inputMode="decimal" value={f.vat_amount} placeholder={String(auto)} onChange={(e) => setF({ ...f, vat_amount: e.target.value })} />
+        </Field>
+        <Field label="כמה מוכר לקיזוז">
+          <Select value={f.vat_claim_pct} onChange={(e) => setF({ ...f, vat_claim_pct: e.target.value })}>
+            <option value="100">הכל (100%)</option>
+            <option value="66.67">שני שליש: טלפון נייד, רכב בשימוש עסקי עיקרי</option>
+            <option value="25">רבע: רכב בשימוש מעורב</option>
+            <option value="0">כלום: כיבוד, מתנות, הוצאה פרטית</option>
+          </Select>
+        </Field>
+        <Field label="מספר הקצאה" hint="חובה בחשבונית מעל 5,000 ₪ לפני מע״מ, אחרת אי אפשר לקזז">
+          <Input value={f.allocation_number} inputMode="numeric" onChange={(e) => setF({ ...f, allocation_number: e.target.value })} />
+        </Field>
+        <Field label="ע.מ / ח.פ של הספק"><Input value={f.supplier_tax_id} inputMode="numeric" onChange={(e) => setF({ ...f, supplier_tax_id: e.target.value })} /></Field>
+        <label className="sm:col-span-2 flex items-center gap-3 text-[15px]">
+          <input type="checkbox" className="size-5 accent-[var(--pink)]" checked={f.is_asset} onChange={(e) => setF({ ...f, is_asset: e.target.checked })} />
+          ציוד (מחשב, מצלמה, ריהוט): נכנס בשורה של תשומות ציוד
+        </label>
+      </>}
+    </fieldset>
   );
 }
 
