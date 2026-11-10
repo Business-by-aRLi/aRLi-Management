@@ -15,13 +15,17 @@ export type Balance = { partner_id: string; name: string; entitled: number; held
 export type Expense = {
   id: string; spent_on: string; amount: number; description: string; vendor?: string | null; category: string | null; reference: string | null;
   receipt_path: string | null; notes?: string | null; project_id: string | null; paid_by_partner_id: string | null;
+  // Input VAT (עוסק מורשה). vat_doc null = not checked yet.
+  vat_doc?: VatDoc | null; vat_amount?: number | null; vat_claim_pct?: number; is_asset?: boolean;
+  allocation_number?: string | null; supplier_tax_id?: string | null; vat_period_start?: string | null;
   projects?: { name: string } | null; partners?: { name: string } | null;
 };
+export type VatDoc = "tax_invoice" | "no_vat";
 export type Income = {
   id: string; received_on: string; amount: number; method: string | null; notes: string | null;
   reference: string | null; receipt_path: string | null; project_id: string | null; client_id?: string | null; received_by_partner_id: string | null;
   // synced from Yesh Invoice: source "yeshinvoice", the name on the receipt and its PDF
-  source?: string; customer_name?: string | null; pdf_url?: string | null;
+  source?: string; customer_name?: string | null; pdf_url?: string | null; vat_amount?: number | null; doc_type?: number | null;
   projects?: { name: string } | null; partners?: { name: string } | null; clients?: { name: string } | null;
 };
 export type Settlement = { id: string; settled_on: string; amount: number; from_partner_id: string; to_partner_id: string; notes: string | null };
@@ -237,6 +241,37 @@ export function useConnectorActions() {
   };
 }
 
+// The books of an עוסק מורשה (/books): settings, documents issued in Yesh Invoice, taxes paid.
+export type TaxProfile = {
+  vat_status: "exempt" | "licensed"; licensed_from: string; vat_rate: number; vat_period: "monthly" | "bimonthly";
+  advance_rate: number | null; owner_partner_id: string | null; vat_file_number: string | null;
+  accountant_name: string | null; accountant_email: string | null; notes: string | null;
+};
+export type SalesDocument = {
+  id: string; source: string; external_id: string; doc_type: number; doc_number: string; issued_on: string;
+  customer_name: string | null; client_id: string | null; total: number; vat: number; net: number; vat_manual: boolean;
+  title: string | null; pdf_url: string | null; clients?: { name: string } | null;
+};
+export type TaxKind = "vat" | "income_tax_advance" | "national_insurance";
+export type TaxPayment = {
+  id: string; kind: TaxKind; period_start: string; amount: number; paid_on: string | null; paid_by_partner_id: string | null;
+  reference: string | null; notes: string | null;
+};
+export const useTaxProfile = () => q<TaxProfile | null>(["books", "profile"], () => supabase.from("tax_profile").select("*").maybeSingle());
+export const useSalesDocuments = () => q<SalesDocument[]>(["books", "sales"], () =>
+  supabase.from("sales_documents").select("*,clients(name)").order("issued_on", { ascending: false }).limit(2000));
+export const useTaxPayments = () => q<TaxPayment[]>(["books", "payments"], () =>
+  supabase.from("tax_payments").select("*").order("period_start", { ascending: false }));
+export function useSaveTaxProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (values: Partial<TaxProfile>) => {
+      must(await supabase.from("tax_profile").upsert({ id: true, ...values, updated_at: new Date().toISOString() }));
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["books"] }),
+  });
+}
+
 export async function receiptUrl(path: string) {
   const { data } = await supabase.storage.from("receipts").createSignedUrl(path, 60 * 10);
   return data?.signedUrl;
@@ -258,6 +293,8 @@ export type ParsedDocument = {
   is_financial_document: boolean; kind: "expense" | "income"; confidence: "high" | "medium" | "low";
   counterparty?: string; amount?: number; currency: string; date?: string; invoice_number?: string;
   description?: string; category?: string; project_id: string | null; payment_method?: string; note?: string;
+  // VAT details on a supplier's invoice (expenses)
+  doc_vat_kind?: "tax_invoice" | "no_vat" | "unknown"; vat_amount?: number; allocation_number?: string; supplier_tax_id?: string;
   duplicates: { table: string; id: string; date: string; amount: number }[];
 };
 

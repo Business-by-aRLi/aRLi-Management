@@ -100,6 +100,10 @@ export function DocumentUpload({ onDone, projectId, context }: { onDone: () => v
         <ExpenseForm key="expense" receiptPath={state.path} onDone={saved} onCancel={cancel} context={context} initial={{
           amount, description: desc, vendor: p?.counterparty ?? "", ...(isDate(p?.date) ? { spent_on: p!.date } : {}), project_id: projectId ?? p?.project_id ?? "",
           category: p?.category ?? "", reference: p?.invoice_number ?? "", notes,
+          // a foreign currency invoice carries no Israeli VAT; otherwise what the document says
+          ...(foreign ? { vat_doc: "no_vat" as const } : p?.doc_vat_kind && p.doc_vat_kind !== "unknown" ? { vat_doc: p.doc_vat_kind } : {}),
+          ...(!foreign && p?.doc_vat_kind === "tax_invoice" && Number(p.vat_amount) > 0 ? { vat_amount: String(p.vat_amount) } : {}),
+          allocation_number: p?.allocation_number ?? "", supplier_tax_id: p?.supplier_tax_id ?? "",
         }} />
       ) : (
         <IncomeForm key="income" receiptPath={state.path} onDone={saved} onCancel={cancel} context={context} initial={{
