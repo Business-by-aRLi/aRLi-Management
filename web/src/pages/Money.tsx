@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { Ledger } from "../components/Ledger";
 import {
   receiptUrl, useExpenses, useIncome, usePartners, useProjects, useRecurring, useRemove, useSave, useSettlements,
   type Expense, type Income, type RecurringCost,
@@ -8,11 +10,13 @@ import { Button, Card, Empty, ErrorNote, Field, IconButton, Input, Loading, Moda
 import { ExpenseForm, IncomeForm, SettlementForm } from "../components/forms";
 import { DocumentUpload } from "../components/DocumentUpload";
 
-type Tab = "expenses" | "income" | "settlements" | "recurring";
-const TABS: [Tab, string][] = [["expenses", "הוצאות"], ["income", "הכנסות"], ["settlements", "התחשבנויות"], ["recurring", "שוטפות"]];
+type Tab = "expenses" | "income" | "settlements" | "recurring" | "ledger";
+const TABS: [Tab, string][] = [["expenses", "הוצאות"], ["income", "הכנסות"], ["ledger", "כרטסת"], ["settlements", "העברות"], ["recurring", "שוטפות"]];
 
 export default function Money() {
-  const [tab, setTab] = useState<Tab>("expenses");
+  const [params, setParams] = useSearchParams();
+  const tab = (TABS.find(([k]) => k === params.get("tab"))?.[0] ?? "expenses") as Tab;
+  const setTab = (t: Tab) => setParams(t === "expenses" ? {} : { tab: t }, { replace: true });
   const [modal, setModal] = useState<null | { kind: Tab | "document"; row?: Expense | Income | RecurringCost }>(null);
   const close = () => setModal(null);
 
@@ -23,7 +27,7 @@ export default function Money() {
           <Button arrow className="group" onClick={() => setModal({ kind: "document" })}>העלאת מסמך</Button>
           <Button variant="ghost" onClick={() => setModal({ kind: "expenses" })}>הוצאה</Button>
           <Button variant="ghost" onClick={() => setModal({ kind: "income" })}>הכנסה</Button>
-          <Button variant="ghost" onClick={() => setModal({ kind: "settlements" })}>התחשבנות</Button>
+          <Button variant="ghost" onClick={() => setModal({ kind: "settlements" })}>העברה</Button>
         </div>
       } />
 
@@ -31,6 +35,7 @@ export default function Money() {
 
       {tab === "expenses" && <ExpensesList onEdit={(row) => setModal({ kind: "expenses", row })} />}
       {tab === "income" && <IncomeList onEdit={(row) => setModal({ kind: "income", row })} />}
+      {tab === "ledger" && <Ledger />}
       {tab === "settlements" && <SettlementsList />}
       {tab === "recurring" && <RecurringList onEdit={(row) => setModal({ kind: "recurring", row })} onAdd={() => setModal({ kind: "recurring" })} />}
 
@@ -43,7 +48,7 @@ export default function Money() {
       <Modal open={modal?.kind === "document"} onClose={close} title="העלאת מסמך">
         <DocumentUpload onDone={close} />
       </Modal>
-      <Modal open={modal?.kind === "settlements"} onClose={close} title="התחשבנות חדשה">
+      <Modal open={modal?.kind === "settlements"} onClose={close} title="העברה ביניכן">
         <SettlementForm onDone={close} />
       </Modal>
       <Modal open={modal?.kind === "recurring"} onClose={close} title={modal?.row ? "עריכת עלות שוטפת" : "עלות שוטפת חדשה"}>

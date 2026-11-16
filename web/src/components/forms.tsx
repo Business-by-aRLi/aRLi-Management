@@ -25,6 +25,16 @@ function PartnerSelect({ value, onChange, allowNone }: { value: string; onChange
   );
 }
 
+function IncomeOwnerSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const partners = usePartners();
+  return (
+    <Select value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">לפי החלוקה (פרויקט או עסק)</option>
+      {partners.data?.map((p) => <option key={p.id} value={p.id}>כולה של {p.name}</option>)}
+    </Select>
+  );
+}
+
 function Actions({ pending, error, onCancel }: { pending: boolean; error: unknown; onCancel: () => void }) {
   return (
     <div className="flex flex-wrap items-center gap-3 pt-2">
@@ -42,7 +52,7 @@ type ExpenseFields = {
   // input VAT, once the business is עוסק מורשה
   vat_doc: VatDoc | ""; vat_amount: string; vat_claim_pct: string; is_asset: boolean; allocation_number: string; supplier_tax_id: string;
 };
-type IncomeFields = { amount: string; received_on: string; project_id: string; received_by_partner_id: string; method: string; reference: string; notes: string };
+type IncomeFields = { amount: string; received_on: string; project_id: string; received_by_partner_id: string; for_partner_id: string; method: string; reference: string; notes: string };
 
 // `initial` prefills a new row (from a parsed document); `receiptPath` is a document that is already uploaded;
 // `onCancel` runs instead of onDone when the partner cancels (so an unused upload can be removed).
@@ -156,7 +166,7 @@ export function IncomeForm({ row, onDone, initial, receiptPath, onCancel, contex
   const save = useSave("income");
   const [f, setF] = useState<IncomeFields>({
     amount: row?.amount?.toString() ?? "", received_on: row?.received_on ?? today(), project_id: row?.project_id ?? "",
-    received_by_partner_id: row?.received_by_partner_id ?? "", method: row?.method ?? "", reference: row?.reference ?? "",
+    received_by_partner_id: row?.received_by_partner_id ?? "", for_partner_id: row?.for_partner_id ?? "", method: row?.method ?? "", reference: row?.reference ?? "",
     notes: row?.notes ?? "", ...initial,
   });
   const [file, setFile] = useState<File | null>(null);
@@ -176,7 +186,7 @@ export function IncomeForm({ row, onDone, initial, receiptPath, onCancel, contex
       id: row?.id,
       values: {
         amount: Number(f.amount), received_on: f.received_on, project_id: nullIfEmpty(f.project_id), client_id,
-        received_by_partner_id: f.received_by_partner_id, method: nullIfEmpty(f.method), reference: nullIfEmpty(f.reference),
+        received_by_partner_id: f.received_by_partner_id, for_partner_id: nullIfEmpty(f.for_partner_id), method: nullIfEmpty(f.method), reference: nullIfEmpty(f.reference),
         notes: nullIfEmpty(f.notes), receipt_path,
       },
     });
@@ -191,6 +201,9 @@ export function IncomeForm({ row, onDone, initial, receiptPath, onCancel, contex
       <Field label="פרויקט"><ProjectPicker value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" {...context} /></Field>
       {synced && !projects.data?.find((p) => p.id === f.project_id)?.client_id && <Field label="לקוח"><ClientPicker value={client} onChange={setClient} /></Field>}
       <Field label="מי קיבלה"><PartnerSelect value={f.received_by_partner_id} onChange={set("received_by_partner_id")} /></Field>
+      <Field label="של מי ההכנסה" hint="לכרטסת: לפי חלוקת הפרויקט, או כולה של שותפה אחת">
+        <IncomeOwnerSelect value={f.for_partner_id} onChange={set("for_partner_id")} />
+      </Field>
       <Field label="אמצעי תשלום"><Input value={f.method} onChange={(e) => set("method")(e.target.value)} placeholder="העברה, ביט, צ׳ק…" /></Field>
       <Field label="אסמכתה"><Input value={f.reference} onChange={(e) => set("reference")(e.target.value)} /></Field>
       <Field label="הערות"><Input value={f.notes} onChange={(e) => set("notes")(e.target.value)} /></Field>
