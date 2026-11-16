@@ -1,9 +1,10 @@
 // Home: a place for growth. Momentum first, then the month's plan, goals and ideas.
 // The partner balance lives in one calm module, not in the headline.
 import { useState } from "react";
+import { SettleLine, useBusinessBalance, useLedgerTotals } from "../components/Ledger";
 import { Link } from "react-router-dom";
 import {
-  useBusinessSummary, useExpenseSettlement, usePartnerSummary, usePartnerShares, useFinancials, useExpenses, useIdeas, useIncome, useMeetings, useProjects, useRemove, useSave, useTasks, useTime, useWorkPlans,
+  useBusinessSummary, useFinancials, useExpenses, useIdeas, useIncome, useMeetings, useProjects, useRemove, useSave, useTasks, useTime, useWorkPlans,
   type Idea, type WorkPlan,
 } from "../lib/data";
 import { money, today } from "../lib/format";
@@ -194,38 +195,42 @@ function IdeasBoard({ ideas, meId }: { ideas: Idea[]; meId?: string }) {
   );
 }
 
-// Two separate things: the business's profit & loss, and the partner settlement.
-// The settlement is about expenses only: every expense is shared half-half (Miri, 2026-11-06).
+// Two separate things: the business's profit & loss, and where each partner stands in the ledger (כרטסת).
 export function BalanceModule() {
-  const split = useExpenseSettlement();
+  const totals = useLedgerTotals();
+  const bizAcc = useBusinessBalance();
   const business = useBusinessSummary();
-  const rows = split.data ?? [];
   const biz = business.data;
-  const total = rows.length ? rows[0].her_half * rows.length : 0;
 
   return (
     <Card>
       <div className="mb-1 flex items-center justify-between">
         <h2 className="text-[24px] font-semibold">התחשבנות</h2>
-        <Link to="/money" className="text-[15px] text-pink hover:text-pink-soft">לכספים ←</Link>
+        <Link to="/money?tab=ledger" className="text-[15px] text-pink hover:text-pink-soft">לכרטסת ←</Link>
       </div>
-      <p className="mb-5 text-[14px] text-mute">כל הוצאה מתחלקת חצי-חצי. כאן רואים מי שילמה מכיסה יותר מהחצי שלה.</p>
+      <p className="mb-5 text-[14px] text-mute">הוצאות מתחלקות לפי חלוקת העסק, והכנסות לפי חלוקת הפרויקט. כאן רואים איפה כל אחת עומדת מול העסק.</p>
 
       <section className="mb-6">
         <div className="grid gap-3 sm:grid-cols-2">
-          {rows.map((r) => (
-            <div key={r.partner_id} className="rounded-2xl border border-[var(--line)] px-4 py-3 text-[14px]">
-              <p className="mb-1 text-[15px] font-medium">{r.name}</p>
-              <Line label="שילמה מכיסה" value={r.paid} />
-              <Line label="החצי שלה מכל ההוצאות" value={r.her_half} />
+          {totals.map((t) => (
+            <div key={t.id} className="rounded-2xl border border-[var(--line)] px-4 py-3 text-[14px]">
+              <p className="mb-1 text-[15px] font-medium">{t.name}</p>
+              <Line label="שילמה מכיסה" value={t.paid} />
+              <Line label="חלקה בהוצאות" value={-t.expenseShare} />
+              <Line label="מגיע לה מהכנסות" value={t.entitled} />
+              <Line label="הכנסות שהגיעו אליה ישירות" value={-t.received} />
+              <Line label="העברות, משיכות והפקדות" value={t.moves} />
               <div className="mt-2 flex justify-between border-t border-[var(--line)] pt-2">
-                <span className="text-mute">סה״כ יתרה</span>
-                <Num className="font-medium">{money(Math.abs(r.balance) < 0.005 ? 0 : r.balance)}</Num>
+                <span className="text-mute">יתרה</span>
+                <Num className="font-medium">{money(Math.abs(t.balance))} {Math.abs(t.balance) < 0.005 ? "" : t.balance > 0 ? "זכות" : "חובה"}</Num>
               </div>
             </div>
           ))}
         </div>
-        <p className="mt-2 text-[13px] text-mute-2">סך כל ההוצאות <Num>{money(total)}</Num>. יתרה חיובית: שילמה יותר מהחצי שלה.</p>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <SettleLine totals={totals} />
+          {bizAcc.has && <span className="text-[14px] text-mute">בחשבון העסק <Num className="text-bone">{money(bizAcc.balance)}</Num></span>}
+        </div>
       </section>
 
       {biz && (
@@ -248,81 +253,12 @@ export function BalanceModule() {
           </div>
         </section>
       )}
-
-      <ProfitSplit />
     </Card>
   );
 }
 
-// Overall profit split: each project's profit by its own split, minus each partner's half of the
-// business's general costs. Separate from the expense settlement above.
-function ProfitSplit() {
-  const summary = usePartnerSummary();
-  const shares = usePartnerShares();
-  const fin = useFinancials();
-  const biz = useBusinessSummary();
-  const [open, setOpen] = useState(false);
-  const rows = summary.data ?? [];
-  if (!rows.length || !biz.data) return null;
-  const showExpected = biz.data.outstanding > 0.005;
-  const projShare = (id: string, key: "amount" | "expected_amount") =>
-    (shares.data ?? []).filter((s) => s.partner_id === id).reduce((t, s) => t + Number(s[key]), 0);
-  const projects = (fin.data ?? []).filter((f) => Math.abs(f.profit) > 0.005 || (f.outstanding ?? 0) > 0.005);
-  const nameOf = (pid: string) => fin.data?.find((f) => f.project_id === pid)?.name ?? "";
-
-  return (
-    <section className="mt-6">
-      <h3 className="mb-1 text-[17px] font-semibold">חלוקת הרווח</h3>
-      <p className="mb-2 text-[13px] text-mute">רווח כל פרויקט לפי החלוקה שלו, פחות החצי של כל אחת מההוצאות הכלליות.</p>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {rows.map((r) => {
-          const fromProjects = projShare(r.partner_id, "amount");
-          return (
-            <div key={r.partner_id} className="rounded-2xl border border-[var(--line)] px-4 py-3 text-[14px]">
-              <p className="mb-1 text-[15px] font-medium">{r.name}</p>
-              <Line label="מהפרויקטים" value={fromProjects} />
-              <Line label="פחות חצי מההוצאות הכלליות" value={r.profit_share - fromProjects} />
-              <div className="mt-2 flex justify-between border-t border-[var(--line)] pt-2">
-                <span className="text-mute">אמורה לקבל מהרווח</span><Num className="font-medium">{money(r.profit_share)}</Num>
-              </div>
-              {showExpected && <Line label="לפי הצפי" value={r.expected_profit_share} />}
-              <Line label="קיבלה עד עכשיו מכספי העסק" value={r.received} />
-            </div>
-          );
-        })}
-      </div>
-      <button type="button" className="mt-2 text-[13px] text-pink hover:text-pink-soft" onClick={() => setOpen(!open)}>
-        {open ? "הסתרת הפירוט לפי פרויקט" : "פירוט לפי פרויקט"}
-      </button>
-      {open && (
-        <div className="mt-2 overflow-x-auto rounded-2xl border border-[var(--line)] text-[13px]">
-          <table className="w-full">
-            <thead className="text-mute"><tr>
-              <th className="px-3 py-2 text-start font-normal">פרויקט</th><th className="px-3 py-2 text-start font-normal">רווח</th>
-              {rows.map((r) => <th key={r.partner_id} className="px-3 py-2 text-start font-normal">{r.name}</th>)}
-            </tr></thead>
-            <tbody>
-              {projects.map((f) => (
-                <tr key={f.project_id} className="border-t border-[var(--line)]">
-                  <td className="px-3 py-2">{nameOf(f.project_id)}</td>
-                  <td className="px-3 py-2"><Num>{money(f.profit)}</Num></td>
-                  {rows.map((r) => {
-                    const s = shares.data?.find((x) => x.project_id === f.project_id && x.partner_id === r.partner_id);
-                    return <td key={r.partner_id} className="px-3 py-2"><Num>{money(s?.amount ?? 0)}</Num>
-                      <span className="text-mute"> ({s?.fixed_amount != null ? "קבוע" : `${Number(s?.percent ?? 0)}%`})</span></td>;
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
-
 function Line({ label, value }: { label: string; value: number }) {
-  return <div className="flex justify-between py-0.5"><span className="text-mute">{label}</span><Num>{money(value)}</Num></div>;
+  return <div className="flex justify-between py-0.5"><span className="text-mute">{label}</span><Num>{money(Math.round(value * 100) / 100)}</Num></div>;
 }
 
 function Upcoming() {
