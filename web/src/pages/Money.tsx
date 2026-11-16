@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Ledger } from "../components/Ledger";
 import {
-  receiptUrl, useExpenses, useIncome, usePartners, useProjects, useRecurring, useRemove, useSave, useSettlements,
+  BIZ, BIZ_NAME, receiptUrl, useExpenses, useIncome, usePartners, useProjects, useRecurring, useRemove, useSave, useSettlements,
   type Expense, type Income, type RecurringCost,
 } from "../lib/data";
 import { date, money } from "../lib/format";
@@ -11,7 +11,7 @@ import { ExpenseForm, IncomeForm, SettlementForm } from "../components/forms";
 import { DocumentUpload } from "../components/DocumentUpload";
 
 type Tab = "expenses" | "income" | "settlements" | "recurring" | "ledger";
-const TABS: [Tab, string][] = [["expenses", "הוצאות"], ["income", "הכנסות"], ["ledger", "כרטסת"], ["settlements", "העברות"], ["recurring", "שוטפות"]];
+const TABS: [Tab, string][] = [["expenses", "הוצאות"], ["income", "הכנסות"], ["ledger", "כרטסת"], ["settlements", "העברות ומשיכות"], ["recurring", "שוטפות"]];
 
 export default function Money() {
   const [params, setParams] = useSearchParams();
@@ -70,7 +70,7 @@ function Filters({ projectId, setProjectId, partnerId, setPartnerId, month, setM
         {projects.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
       </Select>
       <Select aria-label="שותפה" value={partnerId} onChange={(e) => setPartnerId(e.target.value)}>
-        <option value="">שתיהן</option>
+        <option value="">הכל</option><option value={BIZ}>{BIZ_NAME}</option>
         {partners.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
       </Select>
       <div className="col-span-2 sm:col-span-1"><MonthSelect value={month} onChange={setMonth} /></div>
@@ -85,7 +85,7 @@ function ExpensesList({ onEdit }: { onEdit: (r: Expense) => void }) {
   const [projectId, setProjectId] = useState(""); const [partnerId, setPartnerId] = useState(""); const [month, setMonth] = useState("");
   const rows = useMemo(() => (data ?? []).filter((r) =>
     (!projectId || (projectId === "none" ? !r.project_id : r.project_id === projectId)) &&
-    (!partnerId || r.paid_by_partner_id === partnerId) && (!month || r.spent_on.startsWith(month))), [data, projectId, partnerId, month]);
+    (!partnerId || (partnerId === BIZ ? !r.paid_by_partner_id : r.paid_by_partner_id === partnerId)) && (!month || r.spent_on.startsWith(month))), [data, projectId, partnerId, month]);
   if (isLoading) return <Loading />;
   if (error) return <ErrorNote error={error} />;
 
@@ -97,7 +97,7 @@ function ExpensesList({ onEdit }: { onEdit: (r: Expense) => void }) {
       {rows.map((r) => (
         <Row key={r.id} date={r.spent_on} amount={r.amount} onEdit={() => onEdit(r)}
           title={r.description}
-          meta={<>{r.vendor && <>{r.vendor} · </>}{r.projects?.name ?? "כללי"} · שילמה {r.partners?.name ?? "?"}{r.reference && <> · <Num>#{r.reference}</Num></>}</>}
+          meta={<>{r.vendor && <>{r.vendor} · </>}{r.projects?.name ?? "כללי"} · שילמה {r.partners?.name ?? "מחשבון העסק"}{r.reference && <> · <Num>#{r.reference}</Num></>}</>}
           actions={<>
             {r.receipt_path && <IconButton icon="receipt" label="פתיחת הקבלה" onClick={async () => { const u = await receiptUrl(r.receipt_path!); if (u) window.open(u, "_blank"); }} />}
             <IconButton icon="trash" label="מחיקת ההוצאה" onClick={async () => (await confirm({ title: "למחוק את ההוצאה?", body: `${r.description}, ${money(r.amount)}` })) && remove.mutate(r.id)} />
@@ -114,7 +114,7 @@ function IncomeList({ onEdit }: { onEdit: (r: Income) => void }) {
   const [projectId, setProjectId] = useState(""); const [partnerId, setPartnerId] = useState(""); const [month, setMonth] = useState("");
   const rows = useMemo(() => (data ?? []).filter((r) =>
     (!projectId || (projectId === "none" ? !r.project_id : r.project_id === projectId)) &&
-    (!partnerId || r.received_by_partner_id === partnerId) && (!month || r.received_on.startsWith(month))), [data, projectId, partnerId, month]);
+    (!partnerId || (partnerId === BIZ ? !r.received_by_partner_id : r.received_by_partner_id === partnerId)) && (!month || r.received_on.startsWith(month))), [data, projectId, partnerId, month]);
   const toAssign = (data ?? []).filter((r) => r.source === "yeshinvoice" && !r.client_id).length;
   if (isLoading) return <Loading />;
   if (error) return <ErrorNote error={error} />;
@@ -128,7 +128,7 @@ function IncomeList({ onEdit }: { onEdit: (r: Income) => void }) {
         <Row key={r.id} date={r.received_on} amount={r.amount} positive onEdit={() => onEdit(r)}
           title={r.projects?.name ?? r.clients?.name ?? r.customer_name ?? "בלי פרויקט"}
           meta={<>{r.source === "yeshinvoice" && !r.client_id && <span className="text-pink">לשיוך · </span>}
-            התקבל אצל {r.partners?.name ?? "?"}{r.source === "yeshinvoice" ? ` · ${r.reference ?? "יש חשבונית"}` : r.method ? ` · ${r.method}` : ""}</>}
+            {r.partners?.name ? `התקבל אצל ${r.partners.name}` : "נכנס לחשבון העסק"}{r.source === "yeshinvoice" ? ` · ${r.reference ?? "יש חשבונית"}` : r.method ? ` · ${r.method}` : ""}</>}
           actions={<>
             {r.receipt_path && <IconButton icon="receipt" label="פתיחת המסמך" onClick={async () => { const u = await receiptUrl(r.receipt_path!); if (u) window.open(u, "_blank"); }} />}
             {!r.receipt_path && r.pdf_url && <IconButton icon="receipt" label="פתיחת הקבלה ביש חשבונית" onClick={() => window.open(r.pdf_url!, "_blank", "noopener")} />}
@@ -144,15 +144,15 @@ function SettlementsList() {
   const partners = usePartners();
   const remove = useRemove("settlements");
   const confirm = useConfirm();
-  const name = (id: string) => partners.data?.find((p) => p.id === id)?.name ?? "?";
+  const name = (id: string | null) => (id ? partners.data?.find((p) => p.id === id)?.name ?? "?" : BIZ_NAME);
   if (isLoading) return <Loading />;
   return (
     <Card>
-      {!data?.length && <Empty>עוד לא נרשמו העברות ביניכן.</Empty>}
+      {!data?.length && <Empty>עוד לא נרשמו העברות או משיכות.</Empty>}
       {data?.map((r) => (
         <div key={r.id} className="row-line flex items-center justify-between gap-4 py-3">
           <span className="text-[14px] text-mute"><Num>{date(r.settled_on)}</Num></span>
-          <span className="flex-1">{name(r.from_partner_id)} העבירה ל{name(r.to_partner_id)}{r.notes && <span className="text-mute"> · {r.notes}</span>}</span>
+          <span className="flex-1">{!r.from_partner_id ? `${name(r.to_partner_id)} משכה מחשבון העסק` : !r.to_partner_id ? `${name(r.from_partner_id)} הפקידה לחשבון העסק` : `${name(r.from_partner_id)} העבירה ל${name(r.to_partner_id)}`}{r.notes && <span className="text-mute"> · {r.notes}</span>}</span>
           <span className="font-medium"><Num>{money(r.amount)}</Num></span>
           <IconButton icon="trash" label="מחיקת ההתחשבנות" onClick={async () => (await confirm({ title: "למחוק את ההתחשבנות?", body: money(r.amount) })) && remove.mutate(r.id)} />
         </div>
@@ -176,7 +176,7 @@ function RecurringList({ onEdit, onAdd }: { onEdit: (r: RecurringCost) => void; 
       {!data?.length && <Empty>למשל מנויים ל-Supabase, Lovable, דומיינים.</Empty>}
       {data?.map((r) => (
         <button key={r.id} onClick={() => onEdit(r)} className={`row-line row-btn flex w-[calc(100%+20px)] items-center justify-between gap-4 py-3 text-start ${r.active ? "" : "opacity-50"}`}>
-          <span className="flex-1">{r.name}<span className="text-mute"> · {r.frequency === "yearly" ? "שנתי" : "חודשי"} · משלמת {partners.data?.find((p) => p.id === r.paid_by_partner_id)?.name ?? "?"}</span></span>
+          <span className="flex-1">{r.name}<span className="text-mute"> · {r.frequency === "yearly" ? "שנתי" : "חודשי"} · משלמת {partners.data?.find((p) => p.id === r.paid_by_partner_id)?.name ?? BIZ_NAME}</span></span>
           <span className="font-medium"><Num>{money(r.amount)}</Num></span>
         </button>
       ))}
@@ -204,7 +204,7 @@ function RecurringForm({ row, onDone }: { row?: RecurringCost; onDone: () => voi
       </Field>
       <Field label="מי משלמת">
         <Select value={f.paid_by_partner_id} onChange={(e) => setF({ ...f, paid_by_partner_id: e.target.value })}>
-          <option value="">בחרי</option>{partners.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          <option value="">{BIZ_NAME}</option>{partners.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </Select>
       </Field>
       <Field label="פעיל">

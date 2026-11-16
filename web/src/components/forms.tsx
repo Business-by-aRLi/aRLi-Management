@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
-import { uploadReceipt, useExpenses, usePartners, useProjects, useSave, useTaxProfile, type Expense, type VatDoc, type Income, type Task, type Meeting, type MeetingKind } from "../lib/data";
+import { BIZ, fromBiz, toBiz, uploadReceipt, useExpenses, usePartners, useProjects, useSave, useTaxProfile, type Expense, type VatDoc, type Income, type Task, type Meeting, type MeetingKind } from "../lib/data";
 import { Button, Field, Input, Segmented, Select, Textarea } from "./ui";
 import { currentQuarter, PlanPicker, ProjectPicker } from "./Pickers";
 import { ClientPicker, resolveClient, type ClientChoice } from "./ClientPicker";
@@ -15,11 +15,12 @@ export function useMe() {
   return partners.data?.find((p) => p.user_id === user.data?.id) ?? null;
 }
 
-function PartnerSelect({ value, onChange, allowNone }: { value: string; onChange: (v: string) => void; allowNone?: string }) {
+function PartnerSelect({ value, onChange, allowNone, business }: { value: string; onChange: (v: string) => void; allowNone?: string; business?: string }) {
   const partners = usePartners();
   return (
     <Select value={value} onChange={(e) => onChange(e.target.value)}>
       {allowNone && <option value="">{allowNone}</option>}
+      {business && <option value={BIZ}>{business}</option>}
       {partners.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
     </Select>
   );
@@ -66,7 +67,7 @@ export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel, conte
   const save = useSave("expenses");
   const [f, setF] = useState<ExpenseFields>({
     amount: row?.amount?.toString() ?? "", description: row?.description ?? "", vendor: row?.vendor ?? "", spent_on: row?.spent_on ?? today(),
-    project_id: row?.project_id ?? "", paid_by_partner_id: row?.paid_by_partner_id ?? "", category: row?.category ?? "",
+    project_id: row?.project_id ?? "", paid_by_partner_id: row ? toBiz(row.paid_by_partner_id) : BIZ, category: row?.category ?? "",
     reference: row?.reference ?? "", notes: row?.notes ?? "",
     vat_doc: row?.vat_doc ?? "", vat_amount: row?.vat_amount?.toString() ?? "", vat_claim_pct: String(row?.vat_claim_pct ?? 100),
     is_asset: row?.is_asset ?? false, allocation_number: row?.allocation_number ?? "", supplier_tax_id: row?.supplier_tax_id ?? "", ...initial,
@@ -76,7 +77,6 @@ export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel, conte
   // The VAT part shows only for expenses from the day the business became מורשה.
   const showVat = !!tax && tax.vat_status === "licensed" && f.spent_on >= tax.licensed_from;
   const rate = Number(tax?.vat_rate ?? 18);
-  useEffect(() => { if (!f.paid_by_partner_id && me) setF((s) => ({ ...s, paid_by_partner_id: me.id })); }, [me]);
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
 
   async function submit(e: FormEvent) {
@@ -86,7 +86,7 @@ export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel, conte
       id: row?.id,
       values: {
         amount: Number(f.amount), description: f.description, vendor: nullIfEmpty(f.vendor.trim()), spent_on: f.spent_on, project_id: nullIfEmpty(f.project_id),
-        paid_by_partner_id: f.paid_by_partner_id, category: nullIfEmpty(f.category), reference: nullIfEmpty(f.reference),
+        paid_by_partner_id: fromBiz(f.paid_by_partner_id), category: nullIfEmpty(f.category), reference: nullIfEmpty(f.reference),
         notes: nullIfEmpty(f.notes), receipt_path,
         ...(showVat || row?.vat_doc ? {
           vat_doc: nullIfEmpty(f.vat_doc),
@@ -106,7 +106,7 @@ export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel, conte
       <Field label="על מה"><Input required value={f.description} onChange={(e) => set("description")(e.target.value)} /></Field>
       <Field label="ספק"><Input list="expense-vendors" value={f.vendor} onChange={(e) => set("vendor")(e.target.value)} placeholder="Vercel, אופיס דיפו…" /><VendorList /></Field>
       <Field label="פרויקט"><ProjectPicker value={f.project_id} onChange={set("project_id")} {...context} /></Field>
-      <Field label="מי שילמה"><PartnerSelect value={f.paid_by_partner_id} onChange={set("paid_by_partner_id")} /></Field>
+      <Field label="מי שילמה"><PartnerSelect value={f.paid_by_partner_id} onChange={set("paid_by_partner_id")} business="אשראי / חשבון העסק" /></Field>
       <Field label="קטגוריה"><Input list="expense-categories" value={f.category} onChange={(e) => set("category")(e.target.value)} placeholder="תוכנה, ציוד, נסיעות…" /><CategoryList /></Field>
       <Field label="אסמכתה"><Input value={f.reference} onChange={(e) => set("reference")(e.target.value)} /></Field>
       <div className="sm:col-span-2"><Field label="הערות"><Input value={f.notes} onChange={(e) => set("notes")(e.target.value)} /></Field></div>
@@ -166,14 +166,13 @@ export function IncomeForm({ row, onDone, initial, receiptPath, onCancel, contex
   const save = useSave("income");
   const [f, setF] = useState<IncomeFields>({
     amount: row?.amount?.toString() ?? "", received_on: row?.received_on ?? today(), project_id: row?.project_id ?? "",
-    received_by_partner_id: row?.received_by_partner_id ?? "", for_partner_id: row?.for_partner_id ?? "", method: row?.method ?? "", reference: row?.reference ?? "",
+    received_by_partner_id: row ? toBiz(row.received_by_partner_id) : BIZ, for_partner_id: row?.for_partner_id ?? "", method: row?.method ?? "", reference: row?.reference ?? "",
     notes: row?.notes ?? "", ...initial,
   });
   const [file, setFile] = useState<File | null>(null);
   // A receipt synced from Yesh Invoice can be tied to a client directly, even one without a project yet.
   const synced = row?.source === "yeshinvoice";
   const [client, setClient] = useState<ClientChoice>({ id: row?.client_id ?? "", newName: row?.customer_name ?? "" });
-  useEffect(() => { if (!f.received_by_partner_id && me) setF((s) => ({ ...s, received_by_partner_id: me.id })); }, [me]);
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
 
   async function submit(e: FormEvent) {
@@ -186,7 +185,7 @@ export function IncomeForm({ row, onDone, initial, receiptPath, onCancel, contex
       id: row?.id,
       values: {
         amount: Number(f.amount), received_on: f.received_on, project_id: nullIfEmpty(f.project_id), client_id,
-        received_by_partner_id: f.received_by_partner_id, for_partner_id: nullIfEmpty(f.for_partner_id), method: nullIfEmpty(f.method), reference: nullIfEmpty(f.reference),
+        received_by_partner_id: fromBiz(f.received_by_partner_id), for_partner_id: nullIfEmpty(f.for_partner_id), method: nullIfEmpty(f.method), reference: nullIfEmpty(f.reference),
         notes: nullIfEmpty(f.notes), receipt_path,
       },
     });
@@ -200,7 +199,7 @@ export function IncomeForm({ row, onDone, initial, receiptPath, onCancel, contex
       {synced && row?.customer_name && <p className="text-[14px] text-mute sm:col-span-2">מיש חשבונית · {row.reference} · על שם {row.customer_name}</p>}
       <Field label="פרויקט"><ProjectPicker value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" {...context} /></Field>
       {synced && !projects.data?.find((p) => p.id === f.project_id)?.client_id && <Field label="לקוח"><ClientPicker value={client} onChange={setClient} /></Field>}
-      <Field label="מי קיבלה"><PartnerSelect value={f.received_by_partner_id} onChange={set("received_by_partner_id")} /></Field>
+      <Field label="לאן נכנס הכסף"><PartnerSelect value={f.received_by_partner_id} onChange={set("received_by_partner_id")} business="חשבון העסק" /></Field>
       <Field label="של מי ההכנסה" hint="לכרטסת: לפי חלוקת הפרויקט, או כולה של שותפה אחת">
         <IncomeOwnerSelect value={f.for_partner_id} onChange={set("for_partner_id")} />
       </Field>
@@ -243,13 +242,14 @@ export function SettlementForm({ from, to, amount, onDone }: { from?: string; to
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
   async function submit(e: FormEvent) {
     e.preventDefault();
-    await save.mutateAsync({ values: { ...f, amount: Number(f.amount), notes: nullIfEmpty(f.notes) } });
+    if (!f.from_partner_id || !f.to_partner_id || f.from_partner_id === f.to_partner_id) return;
+    await save.mutateAsync({ values: { ...f, from_partner_id: fromBiz(f.from_partner_id), to_partner_id: fromBiz(f.to_partner_id), amount: Number(f.amount), notes: nullIfEmpty(f.notes) } });
     onDone();
   }
   return (
     <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
-      <Field label="ממי"><PartnerSelect value={f.from_partner_id} onChange={set("from_partner_id")} allowNone="בחרי" /></Field>
-      <Field label="למי"><PartnerSelect value={f.to_partner_id} onChange={set("to_partner_id")} allowNone="בחרי" /></Field>
+      <Field label="ממי"><PartnerSelect value={f.from_partner_id} onChange={set("from_partner_id")} allowNone="בחרי" business="חשבון העסק (משיכה)" /></Field>
+      <Field label="למי"><PartnerSelect value={f.to_partner_id} onChange={set("to_partner_id")} allowNone="בחרי" business="חשבון העסק (הפקדה)" /></Field>
       <Field label="סכום (₪)"><Input required type="number" step="0.01" min="0.01" value={f.amount} onChange={(e) => set("amount")(e.target.value)} /></Field>
       <Field label="תאריך"><Input required type="date" value={f.settled_on} onChange={(e) => set("settled_on")(e.target.value)} /></Field>
       <div className="sm:col-span-2"><Field label="הערות"><Input value={f.notes} onChange={(e) => set("notes")(e.target.value)} /></Field></div>

@@ -1,7 +1,7 @@
 // Home: a place for growth. Momentum first, then the month's plan, goals and ideas.
 // The partner balance lives in one calm module, not in the headline.
 import { useState } from "react";
-import { SettleLine, useLedgerTotals } from "../components/Ledger";
+import { SettleLine, useBusinessBalance, useLedgerTotals } from "../components/Ledger";
 import { Link } from "react-router-dom";
 import {
   useBusinessSummary, useFinancials, useExpenses, useIdeas, useIncome, useMeetings, useProjects, useRemove, useSave, useTasks, useTime, useWorkPlans,
@@ -198,6 +198,7 @@ function IdeasBoard({ ideas, meId }: { ideas: Idea[]; meId?: string }) {
 // Two separate things: the business's profit & loss, and where each partner stands in the ledger (כרטסת).
 export function BalanceModule() {
   const totals = useLedgerTotals();
+  const bizAcc = useBusinessBalance();
   const business = useBusinessSummary();
   const biz = business.data;
 
@@ -207,7 +208,7 @@ export function BalanceModule() {
         <h2 className="text-[24px] font-semibold">התחשבנות</h2>
         <Link to="/money?tab=ledger" className="text-[15px] text-pink hover:text-pink-soft">לכרטסת ←</Link>
       </div>
-      <p className="mb-5 text-[14px] text-mute">הוצאות מתחלקות לפי חלוקת העסק, והכנסות לפי חלוקת הפרויקט. כאן רואים איפה כל אחת עומדת.</p>
+      <p className="mb-5 text-[14px] text-mute">הוצאות מתחלקות לפי חלוקת העסק, והכנסות לפי חלוקת הפרויקט. כאן רואים איפה כל אחת עומדת מול העסק.</p>
 
       <section className="mb-6">
         <div className="grid gap-3 sm:grid-cols-2">
@@ -217,8 +218,8 @@ export function BalanceModule() {
               <Line label="שילמה מכיסה" value={t.paid} />
               <Line label="חלקה בהוצאות" value={-t.expenseShare} />
               <Line label="מגיע לה מהכנסות" value={t.entitled} />
-              <Line label="הכנסות שהגיעו אליה" value={-t.received} />
-              <Line label="העברות ביניכן" value={t.sent - t.got} />
+              <Line label="הכנסות שהגיעו אליה ישירות" value={-t.received} />
+              <Line label="העברות, משיכות והפקדות" value={t.moves} />
               <div className="mt-2 flex justify-between border-t border-[var(--line)] pt-2">
                 <span className="text-mute">יתרה</span>
                 <Num className="font-medium">{money(Math.abs(t.balance))} {Math.abs(t.balance) < 0.005 ? "" : t.balance > 0 ? "זכות" : "חובה"}</Num>
@@ -226,7 +227,10 @@ export function BalanceModule() {
             </div>
           ))}
         </div>
-        <div className="mt-3"><SettleLine totals={totals} /></div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <SettleLine totals={totals} />
+          {bizAcc.has && <span className="text-[14px] text-mute">בחשבון העסק <Num className="text-bone">{money(bizAcc.balance)}</Num></span>}
+        </div>
       </section>
 
       {biz && (

@@ -29,7 +29,7 @@ export type Income = {
   source?: string; customer_name?: string | null; pdf_url?: string | null; vat_amount?: number | null; doc_type?: number | null;
   projects?: { name: string } | null; partners?: { name: string } | null; clients?: { name: string } | null;
 };
-export type Settlement = { id: string; settled_on: string; amount: number; from_partner_id: string; to_partner_id: string; notes: string | null };
+export type Settlement = { id: string; settled_on: string; amount: number; from_partner_id: string | null; to_partner_id: string | null; notes: string | null };
 export type Task = {
   id: string; title: string; description: string | null; status: string; due_on: string | null; start_on: string | null; priority: number;
   created_at: string; completed_at: string | null; work_plan_id: string | null; project_id: string | null; assignee_partner_id: string | null; is_private: boolean; projects?: { name: string } | null; partners?: { name: string } | null;
@@ -77,7 +77,7 @@ export const useSettlements = () => q<Settlement[]>(["settlements"], () =>
 // Partner ledger (כרטסת): one row per partner per money event, oldest first, with a running balance.
 // credit (זכות): she paid for the business, sent a transfer, or is entitled to part of an income.
 // debit (חובה): her share of an expense, or business money that reached her. balance > 0: she is owed.
-export type LedgerKind = "expense" | "income" | "transfer" | "vat";
+export type LedgerKind = "expense" | "income" | "transfer" | "withdrawal" | "deposit" | "vat";
 export type LedgerRow = {
   partner_id: string; partner_name: string; on_date: string; created_at: string; kind: LedgerKind; ref_id: string;
   description: string; project_id: string | null; project_name: string | null; total: number; actor_id: string | null; actor_name: string | null;
@@ -85,6 +85,21 @@ export type LedgerRow = {
 };
 export const useLedger = () => q<LedgerRow[]>(["balances", "ledger"], () =>
   supabase.from("partner_ledger").select("*").order("on_date").order("created_at").order("ref_id").limit(5000));
+// The business bank account / credit card: money in and out, with a running balance.
+export type BusinessRow = { on_date: string; created_at: string; kind: "income" | "expense" | "withdrawal" | "deposit" | "tax"; ref_id: string; description: string; amount_in: number; amount_out: number; balance: number };
+export const useBusinessLedger = () => q<BusinessRow[]>(["balances", "business-ledger"], () =>
+  supabase.from("business_account_ledger").select("*").order("on_date").order("created_at").order("ref_id").limit(5000));
+// From this date the new split applies (Miri 62.5 / Riki 37.5 on expenses); before it everything stays as it was.
+export type LedgerSettings = { id: boolean; new_split_from: string };
+export const useLedgerSettings = () => useQuery<LedgerSettings | null>({
+  queryKey: ["ledger-settings"],
+  queryFn: async () => { const { data } = await supabase.from("ledger_settings").select("*").maybeSingle(); return (data as LedgerSettings) ?? null; },
+});
+// The business account in partner pickers: "biz" in the form, null in the database.
+export const BIZ = "biz";
+export const BIZ_NAME = "חשבון העסק";
+export const fromBiz = (v: string) => (v === BIZ || v === "" ? null : v);
+export const toBiz = (v: string | null | undefined) => v ?? BIZ;
 export const useRecurring = () => q<RecurringCost[]>(["recurring"], () => supabase.from("recurring_costs").select("*").order("name"));
 export const useTasks = () => q<Task[]>(["tasks"], () =>
   supabase.from("tasks").select("*,projects(name),partners(name)").order("due_on", { ascending: true, nullsFirst: false }));
