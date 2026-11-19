@@ -5,7 +5,8 @@
 //         provider's projects/workspaces, so the app can offer them in a dropdown
 //   POST  { action: "supabase_invoice", path } (partner JWT) -> read an uploaded Supabase invoice PDF
 //         (receipts bucket) and file each project's amount
-// The daily run also looks in the partners' connected Gmail for new Supabase invoices.
+// The daily run also looks in the partners' connected Gmail and in the business mailbox (IMAP) for new
+// Supabase invoices.
 // Deploy with verify_jwt = false: the function checks the caller itself (cron secret or partner JWT).
 //
 // Keys come from the app's Connections screen (infra_connectors, encrypted in Vault), with the
@@ -22,6 +23,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 import { answerText, b64, gemini, S } from "../_shared/gemini.ts";
+import { businessMailConfigured, readBusinessMail, searchBusinessMail } from "../_shared/imap.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const db = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -431,6 +433,41 @@ async function gmailInvoices(full: boolean) {
   return { report, errors };
 }
 
+// Business mailbox (business@arli.co.il, IMAP): the Supabase account bills there. Same rules as Gmail.
+async function businessMailInvoices(full: boolean) {
+  const report: string[] = [], errors: string[] = [];
+  if (!businessMailConfigured()) return { report, errors };
+  try {
+    const since = new Date(Date.now() - (full ? 400 : 45) * 86400e3).toISOString().slice(0, 10);
+    const found = await searchBusinessMail({ from: "supabase", words: ["invoice", "receipt"], since, max: full ? 13 : 5 });
+    const withPdf = found.filter((m) => m.attachments.some((a) => /\.pdf$/i.test(a)));
+    if (!withPdf.length) return { report, errors };
+    const keys = withPdf.map((m) => `bizmail:${m.key}`);
+    const { data: seen } = await db.from("infra_invoice_imports").select("source_key,month,result").in("source_key", keys);
+    const done = new Set((seen ?? []).filter((r) => !r.month || (r.result?.v ?? 1) >= INVOICE_VERSION).map((r) => r.source_key));
+    let budget = 3;
+    for (const m of withPdf) {
+      const key = `bizmail:${m.key}`;
+      if (done.has(key)) continue;
+      if (budget-- <= 0 || Date.now() - started > 40_000) { report.push("ממשיך בסנכרון הבא"); break; }
+      const mail = await readBusinessMail(m.message_id);
+      const pdfs = mail.attachments.filter((a) => a.mimeType === "application/pdf");
+      // Stripe mails carry an invoice and a receipt: the invoice holds the line items.
+      const pdf = pdfs.find((a) => /invoice/i.test(a.filename)) ?? pdfs[0];
+      if (!pdf) continue;
+      try {
+        const r = await applyInvoice(key, await parseInvoice(pdf.content, "application/pdf"));
+        report.push(`חשבונית ${r.month.slice(0, 7)}: ${r.matched} שירותים`);
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (msg.startsWith(NOT_INVOICE)) await db.from("infra_invoice_imports").upsert({ source_key: key, result: { skipped: msg } });
+        else errors.push(`תיבה עסקית: ${msg}`);
+      }
+    }
+  } catch (e) { errors.push(`תיבה עסקית: ${(e as Error).message}`); }
+  return { report, errors };
+}
+
 async function authorized(req: Request) {
   const secret = req.headers.get("x-cron-secret");
   if (secret) {
@@ -536,8 +573,10 @@ Deno.serve(async (req) => {
     // history: look back a year for invoices without re-pulling 12 months of provider costs first,
     // which alone can take most of the time limit.
     const g = await gmailInvoices(!!body.full || !!body.history);
-    if (g.report.length) report.supabase_invoice = g.report.join(" · ");
-    errors.push(...g.errors);
+    const b = await businessMailInvoices(!!body.full || !!body.history);
+    const lines = [...g.report, ...b.report];
+    if (lines.length) report.supabase_invoice = lines.join(" · ");
+    errors.push(...g.errors, ...b.errors);
   }
 
   await db.from("app_config").upsert({ key: "infra_sync_last", value: JSON.stringify({ at: new Date().toISOString(), report, errors }) });

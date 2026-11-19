@@ -41,6 +41,13 @@
 - את מסך ההסכמה (OAuth consent screen) כדאי להעביר למצב "In production". במצב Testing ההרשאה פגה אחרי 7 ימים.
 - טבלאות: `gmail_accounts` (טוקנים, רק ה-service role ניגש), `gmail_oauth_states` (קישורי חיבור, תקפים 15 דקות).
 
+### התיבה העסקית business@arli.co.il (Hostinger)
+
+הבוט מחפש חשבוניות גם בתיבה העסקית המשותפת, דרך IMAP (קריאה בלבד: `EXAMINE` ו-`BODY.PEEK`, שום מייל לא משתנה ולא מסומן כנקרא). כשמבקשים חשבוניות במייל, או `/invoices`, הבוט מחפש גם ב-Gmail וגם בתיבה העסקית. הכלים: `search_business_mail_invoices` ו-`read_business_mail_invoice`. הקובץ נשמר בדלי `receipts` תחת `bizmail/`, ו-`expenses.gmail_message_id` שומר `biz:<Message-ID>` כדי למנוע רישום כפול. גם הסנכרון היומי של `infra-sync` קורא משם חשבוניות Supabase.
+
+- סיקרט חובה: `BUSINESS_MAIL_PASSWORD` (סיסמת התיבה). אופציונלי: `BUSINESS_MAIL_USER` (ברירת מחדל `business@arli.co.il`), `BUSINESS_MAIL_HOST` (ברירת מחדל `imap.hostinger.com`), `BUSINESS_MAIL_PORT` (ברירת מחדל 993).
+- הקוד ב-`supabase/functions/_shared/imap.ts`. בלי הסיקרט, הבוט פשוט אומר שהתיבה לא מחוברת.
+
 ## העלאת מסמך באתר (`supabase/functions/parse-document`)
 
 במסך הכספים, "העלאת מסמך": מעלים תמונה או PDF של חשבונית או קבלה. הקובץ נשמר בדלי `receipts`, והפונקציה `parse-document` קוראת אותו עם Gemini ומחזירה הצעה: הוצאה או הכנסה, סכום, מטבע, תאריך, ספק או לקוח, מספר מסמך, קטגוריה, פרויקט משוער ורשומות שאולי כפולות. היא לא רושמת כלום. האתר מציג טופס מלא מראש, והשותפה מאשרת או מתקנת לפני השמירה. אם מבטלים, הקובץ נמחק.
