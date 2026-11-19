@@ -124,7 +124,7 @@ function SupabaseInvoices() {
         <input ref={input} type="file" accept="application/pdf,image/*" className="hidden"
           onChange={(e) => { const f = e.target.files?.[0]; if (f) upload.mutate(f); e.target.value = ""; }} />
       </div>
-      <p className="mt-1 text-[14px] text-mute">כל בוקר נבדק ה־Gmail המחובר לחשבוניות Supabase חדשות. אפשר גם להעלות PDF מ־Billing › Invoices.</p>
+      <p className="mt-1 text-[14px] text-mute">כל בוקר נבדקים ה־Gmail המחובר והתיבה העסקית לחשבוניות Supabase חדשות. אפשר גם להעלות PDF מ־Billing › Invoices.</p>
       {upload.error && <p className="mt-2 text-[14px] text-error">{(upload.error as Error).message}</p>}
       {last && (
         <p className="mt-2 text-[14px]">חשבונית {mm(last.month)}: נרשמה עלות ל־{last.matched} שירותים.
@@ -135,7 +135,7 @@ function SupabaseInvoices() {
         <div className="mt-3 space-y-1 text-[13px] text-mute">
           {imports.data.map((i) => (
             <div key={i.source_key}>
-              {mm(i.month)} · {i.source_key.startsWith("gmail:") ? "מ־Gmail" : "הועלתה"}
+              {mm(i.month)} · {i.source_key.startsWith("gmail:") ? "מ־Gmail" : i.source_key.startsWith("bizmail:") ? "מהתיבה העסקית" : "הועלתה"}
               {i.total != null && <> · <bdi>${Number(i.total)}</bdi></>}
               {" "}· {i.result?.matched ?? 0} שויכו{i.result?.unmatched?.length ? `, ${i.result.unmatched.length} לא שויכו` : ""}
             </div>

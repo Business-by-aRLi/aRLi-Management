@@ -8,6 +8,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 import { CALENDAR_SCOPE, GMAIL_SCOPE, googleToken, runCalendarSync } from "./gcal.ts";
+import { BUSINESS_MAIL_USER, businessMailConfigured, readBusinessMail, searchBusinessMail } from "../_shared/imap.ts";
 
 const BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN")!;
 const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY")!;
@@ -178,8 +179,8 @@ const toolDeclarations = [
         reference: S("string", "מספר חשבונית או אסמכתה"),
         notes: S("string", "הערה, למשל הסכום המקורי במטבע זר"),
         attach_receipt: S("boolean", "לצרף את הקובץ שנשלח בהודעה הזו כקבלה"),
-        gmail_message_id: S("string", "כשההוצאה היא חשבונית מ-Gmail: message_id מתוך read_gmail_invoice"),
-        receipt_path: S("string", "כשההוצאה היא חשבונית מ-Gmail: receipt_path מתוך read_gmail_invoice"),
+        gmail_message_id: S("string", "כשההוצאה היא חשבונית ממייל: message_id מתוך read_gmail_invoice, או key מתוך read_business_mail_invoice"),
+        receipt_path: S("string", "כשההוצאה היא חשבונית ממייל: receipt_path מתוך read_gmail_invoice או read_business_mail_invoice"),
       },
       required: ["amount", "description"],
     }),
@@ -374,6 +375,31 @@ const toolDeclarations = [
     }),
   },
   {
+    name: "search_business_mail_invoices",
+    description: `חיפוש מיילים בתיבה העסקית המשותפת ${BUSINESS_MAIL_USER} (שתי השותפות רואות אותה). מחזיר רשימת מיילים עם קבצים מצורפים, ומסמן מה כבר נרשם במערכת. מילים מחפשות בכל המייל, ומספיק שאחת מהן תופיע.`,
+    parameters: S("object", undefined, {
+      properties: {
+        from: S("string", "שולח או חלק מהכתובת, למשל supabase או anthropic"),
+        words: S("array", "מילים לחיפוש, למשל invoice, receipt, חשבונית, קבלה", { items: S("string") }),
+        since: S("string", "מתאריך (כולל) YYYY-MM-DD"),
+        before: S("string", "עד תאריך (לא כולל) YYYY-MM-DD"),
+        folder: S("string", "תיקייה, ברירת מחדל INBOX. אחרות: INBOX.Junk"),
+        max_results: S("integer", "עד 25, ברירת מחדל 10"),
+      },
+    }),
+  },
+  {
+    name: "read_business_mail_invoice",
+    description: "קורא מייל אחד מתוך search_business_mail_invoices: שומר את החשבונית המצורפת כקבלה ומחלץ ממנה ספק, סכום, מטבע, תאריך ומספר חשבונית. לא רושם כלום במערכת.",
+    parameters: S("object", undefined, {
+      properties: {
+        message_id: S("string", "message_id מתוצאות החיפוש, למשל INBOX/464"),
+        attachment_name: S("string", "אם יש כמה קבצים מצורפים, איזה מהם לקרוא"),
+      },
+      required: ["message_id"],
+    }),
+  },
+  {
     name: "read_gmail_invoice",
     description: "קורא מייל אחד מתוך search_gmail_invoices: שומר את החשבונית המצורפת כקבלה ומחלץ ממנה ספק, סכום, מטבע, תאריך ומספר חשבונית. לא רושם כלום במערכת.",
     parameters: S("object", undefined, {
@@ -454,7 +480,7 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
         const dup = check(await db.from("expenses").select("id,spent_on,amount").eq("gmail_message_id", a.gmail_message_id).maybeSingle());
         if (dup) return { ok: false, error: "החשבונית מהמייל הזה כבר רשומה", existing: dup };
       }
-      const receiptPath = typeof a.receipt_path === "string" && a.receipt_path.startsWith("gmail/")
+      const receiptPath = typeof a.receipt_path === "string" && /^(gmail|bizmail)\//.test(a.receipt_path)
         ? a.receipt_path
         : (a.attach_receipt !== false ? ctx.receiptPath : null);
       const row = check(await db.from("expenses").insert({
@@ -509,6 +535,20 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
     }
     case "read_gmail_invoice":
       return await readGmailInvoice(me, a.message_id, a.attachment_name);
+    case "search_business_mail_invoices": {
+      if (!businessMailConfigured()) return { ok: false, error: `התיבה ${BUSINESS_MAIL_USER} עוד לא מחוברת לבוט (חסרה סיסמת התיבה בסיקרטים של Supabase). אפשר לחפש בינתיים ב-Gmail.` };
+      const found = await searchBusinessMail({
+        folder: a.folder, from: a.from, words: Array.isArray(a.words) ? a.words : a.words ? [String(a.words)] : [],
+        since: a.since, before: a.before, max: Number(a.max_results) || 10,
+      });
+      if (!found.length) return { messages: [], note: "לא נמצאו מיילים. אפשר לנסות חיפוש רחב יותר (פחות מילים או טווח תאריכים גדול יותר)." };
+      const recorded = check(await db.from("expenses").select("gmail_message_id").in("gmail_message_id", found.map((m) => m.key))) as { gmail_message_id: string }[];
+      const done = new Set(recorded.map((r) => r.gmail_message_id));
+      return { mailbox: BUSINESS_MAIL_USER, messages: found.map(({ key, ...m }) => ({ ...m, already_recorded: done.has(key) })) };
+    }
+    case "read_business_mail_invoice":
+      if (!businessMailConfigured()) return { ok: false, error: `התיבה ${BUSINESS_MAIL_USER} עוד לא מחוברת לבוט.` };
+      return await readBusinessMailInvoice(a.message_id, a.attachment_name);
     case "add_income": {
       const project = await projectByName(a.project_name);
       const receiver = (await partnerByName(a.received_by)) ?? me;
@@ -951,20 +991,65 @@ async function readGmailInvoice(me: Partner, messageId: string, attachmentName?:
     parts.push({ text: `גוף המייל:\n${body}` });
     source = "email body";
   }
-  parts.push({ text: `מייל מ: ${h.from}\nנושא: ${h.subject}\nתאריך: ${h.date}\nחלצי את פרטי החשבונית.` });
+  const extracted = await extractInvoice(parts, h);
+  return {
+    message_id: messageId, from: h.from, subject: h.subject, email_date: h.date, source,
+    other_attachments: attachments.filter((p) => p !== att).map((p) => p.filename),
+    receipt_path: receiptPath, extracted,
+    already_recorded: dup ?? false,
+  };
+}
 
+// deno-lint-ignore no-explicit-any
+async function extractInvoice(parts: any[], h: { from: string; subject: string; date: string }): Promise<unknown> {
+  parts.push({ text: `מייל מ: ${h.from}\nנושא: ${h.subject}\nתאריך: ${h.date}\nחלצי את פרטי החשבונית.` });
   const res = await gemini({
     contents: [{ role: "user", parts }],
     generationConfig: { responseMimeType: "application/json", responseSchema: invoiceSchema },
   });
   // deno-lint-ignore no-explicit-any
   const raw = (res.candidates?.[0]?.content?.parts ?? []).filter((p: any) => p.text && !p.thought).map((p: any) => p.text).join("");
-  let extracted: unknown = null;
-  try { extracted = JSON.parse(raw); } catch { extracted = { error: "לא הצלחתי לחלץ את הפרטים", raw: raw.slice(0, 500) }; }
+  try { return JSON.parse(raw); } catch { return { error: "לא הצלחתי לחלץ את הפרטים", raw: raw.slice(0, 500) }; }
+}
 
+// Same as readGmailInvoice, for the shared business mailbox (IMAP). The receipt goes under bizmail/.
+async function readBusinessMailInvoice(messageId: string, attachmentName?: string) {
+  const m = await readBusinessMail(messageId);
+  const h = { from: m.from, subject: m.subject, date: m.date };
+  const dup = check(await db.from("expenses").select("id,spent_on,amount").eq("gmail_message_id", m.key).maybeSingle());
+  const month = (m.date ? new Date(m.date) : new Date()).toISOString().slice(0, 7);
+  const fileId = messageId.replace(/[^\w]+/g, "_");
+  // deno-lint-ignore no-explicit-any
+  const parts: any[] = [];
+  let receiptPath: string | null = null;
+  let source = "";
+  // Stripe-style mails carry an invoice and a receipt: prefer the one named invoice.
+  const pdfs = m.attachments.filter((p) => p.mimeType === "application/pdf");
+  const att = (attachmentName && m.attachments.find((p) => p.filename.includes(attachmentName))) ||
+    pdfs.find((p) => /invoice|חשבונית/i.test(p.filename)) || pdfs[0] || m.attachments[0];
+  if (att) {
+    if (att.content.length > 15 * 1024 * 1024) throw new Error("הקובץ המצורף גדול מדי לקריאה (מעל 15MB).");
+    const safe = att.filename.replace(/[^\w.\-]+/g, "_").slice(-80) || "invoice";
+    const path = `bizmail/${month}/${fileId}-${safe}`;
+    const up = await db.storage.from("receipts").upload(path, att.content, { contentType: att.mimeType, upsert: true });
+    if (!up.error) receiptPath = path;
+    parts.push({ inlineData: { mimeType: att.mimeType, data: b64(att.content) } });
+    source = `attachment: ${att.filename}`;
+  } else {
+    const body = (m.text || m.html.replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " "))
+      .replace(/\s+/g, " ").trim().slice(0, 20000);
+    if (!body) throw new Error("במייל הזה אין קובץ מצורף ואין טקסט לקריאה.");
+    const path = `bizmail/${month}/${fileId}.html`;
+    const file = m.html || `<pre>${m.text.replace(/</g, "&lt;")}</pre>`;
+    const up = await db.storage.from("receipts").upload(path, new TextEncoder().encode(file), { contentType: "text/html", upsert: true });
+    if (!up.error) receiptPath = path;
+    parts.push({ text: `גוף המייל:\n${body}` });
+    source = "email body";
+  }
+  const extracted = await extractInvoice(parts, h);
   return {
-    message_id: messageId, from: h.from, subject: h.subject, email_date: h.date, source,
-    other_attachments: attachments.filter((p) => p !== att).map((p) => p.filename),
+    message_id: messageId, key: m.key, mailbox: BUSINESS_MAIL_USER, from: m.from, subject: m.subject, email_date: m.date, source,
+    other_attachments: m.attachments.filter((p) => p !== att).map((p) => p.filename),
     receipt_path: receiptPath, extracted,
     already_recorded: dup ?? false,
   };
@@ -986,6 +1071,7 @@ function systemPrompt(me: Partner, memories: { id: string; content: string; part
 - כשמגיע צילום של חשבונית או קבלה: קראי את הסכום, התאריך, שם הספק ומספר החשבונית, ורשמי אותה כהוצאה עם vendor (שם הספק) ו-attach_receipt=true. אם לא ברור לאיזה פרויקט היא שייכת, שאלי. אם שום דבר לא ברור, שאלי לפני שאת רושמת.
 - כשמגיעה הודעה קולית: הביני מה נאמר ופעלי לפי זה, ובתשובה כתבי בקצרה מה הבנת.
 - חשבוניות מ-Gmail: כשמבקשים למצוא חשבוניות במייל, חפשי עם search_gmail_invoices (בנו שאילתת Gmail עם ספק, טווח תאריכים after:/before: בפורמט YYYY/MM/DD, ומילים כמו invoice, receipt, חשבונית, קבלה). קראי כל מייל רלוונטי שעוד לא נרשם עם read_gmail_invoice. אחר כך הציגי רשימה קצרה: ספק, תאריך, סכום ומטבע, ופרויקט משוער. רשמי עם add_expense רק אחרי שהשותפה אישרה, ותמיד העבירי vendor, gmail_message_id ו-receipt_path. אם הסכום לא בשקלים, שאלי מה הסכום בשקלים (למשל מהחיוב בכרטיס), ורשמי את הסכום המקורי ב-notes. אם הכלי אומר שה-Gmail לא מחובר, הפעילי connect_gmail.
+- התיבה העסקית ${BUSINESS_MAIL_USER}: הרבה חשבוניות של העסק (Supabase, Anthropic ועוד) מגיעות אליה. כשמבקשים חשבוניות במייל, חפשי גם בה עם search_business_mail_invoices (from, words, since/before בפורמט YYYY-MM-DD) וגם ב-Gmail, אלא אם ביקשו תיבה מסוימת. קראי מייל רלוונטי שעוד לא נרשם עם read_business_mail_invoice. ברישום עם add_expense העבירי gmail_message_id = ה-key שחזר מ-read_business_mail_invoice, ואת receipt_path. אותה חשבונית יכולה להופיע בשתי התיבות: אם ספק, תאריך וסכום זהים, הציגי אותה פעם אחת.
 - משימות אישיות: כל משימה נרשמת ככללית (גלויה לשתיכן), אלא אם ${me.name} אמרה במפורש שהיא אישית ("משימה אישית", "אישי", "פרטי"). אז רשמי עם private=true, ורק היא תראה אותה. אם משימה נשמעת אישית אבל לא נאמר כך, רשמי ככללית ושאלי בסוף התשובה אם להפוך אותה לאישית.
 - אפשר להפוך משימה קיימת לאישית או לכללית עם update_task (private).
 - זיכרון: כשמספרים לך משהו קבוע ("תזכרי ש...", העדפה, איש קשר, החלטה), שמרי עם remember_fact. כשמבקשים לשכוח או מתקנים עובדה, מחקי עם forget_fact (ואם זה תיקון, שמרי את הגרסה הנכונה). אל תשמרי כל פרט מהשיחה, רק מה שיעזור גם בעוד חודש.
@@ -1089,7 +1175,7 @@ const COMMANDS = [
   { command: "income", description: "הכנסה חדשה" },
   { command: "meeting", description: "פגישה חדשה" },
   { command: "time", description: "דיווח שעות" },
-  { command: "invoices", description: "חשבוניות מה-Gmail של החודש" },
+  { command: "invoices", description: "חשבוניות מהמייל של החודש" },
   { command: "week", description: "השבוע שלנו ביומן" },
   { command: "free", description: "מתי שתינו פנויות" },
   { command: "google", description: "חיבור Google (Gmail + יומן)" },
@@ -1493,7 +1579,7 @@ async function handleMessage(msg: any) {
   } else if (text) {
     if (await handleCommand(me, chatId, text, ctx)) return;
     if (parseCommand(text) === "invoices") {
-      const req = `תמצאי לי חשבוניות וקבלות ב-Gmail מתחילת החודש (${today.slice(0, 7)}-01) עד היום`;
+      const req = `תמצאי לי חשבוניות וקבלות במייל (ב-Gmail שלי ובתיבה העסקית) מתחילת החודש (${today.slice(0, 7)}-01) עד היום`;
       parts.push({ text: req });
       logText = req;
     } else {
