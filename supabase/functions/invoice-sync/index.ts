@@ -54,7 +54,9 @@ async function authorized(req: Request) {
   return data === true;
 }
 
-type Conn = { userkey: string; secret: string; partnerId: string | null; types: number[] };
+// partnerId: who received the money before the business account opened (bizFrom). From bizFrom on, client money
+// goes into the business bank account (null), unless the connection names a partner explicitly (extra.partner_id).
+type Conn = { userkey: string; secret: string; partnerId: string | null; fixedPartner: boolean; bizFrom: string; types: number[] };
 async function connection(): Promise<Conn | null> {
   const { data: row } = await db.from("infra_connectors").select("connected_by,extra").eq("provider", "yeshinvoice").maybeSingle();
   let userkey = env("YESH_USERKEY"), secret = env("YESH_SECRET");
@@ -66,7 +68,12 @@ async function connection(): Promise<Conn | null> {
   if (!userkey || !secret) return null;
   const extra = (row?.extra ?? {}) as Record<string, string>;
   const types = (extra.doc_types ?? "").split(",").map(Number).filter((n) => n > 0);
-  return { userkey, secret, partnerId: extra.partner_id || row?.connected_by || null, types: types.length ? types : SYNC_TYPES };
+  const { data: ls } = await db.from("ledger_settings").select("business_account_from").maybeSingle();
+  const bizFrom = (ls as { business_account_from?: string } | null)?.business_account_from ?? "2026-11-16";
+  return {
+    userkey, secret, partnerId: extra.partner_id || row?.connected_by || null, fixedPartner: !!extra.partner_id, bizFrom,
+    types: types.length ? types : SYNC_TYPES,
+  };
 }
 
 async function markCheck(ok: boolean, message: string) {
@@ -206,7 +213,7 @@ Deno.serve(async (req) => {
         : tax.licensed && received_on >= tax.from ? r2(amount * tax.rate / (100 + tax.rate)) : 0;
       rows.push({ vat_amount,
         source: "yeshinvoice", external_id, doc_type: type, amount, received_on, client_id, project_id: onlyProject(client_id),
-        received_by_partner_id: c.partnerId, reference: `${TYPE_NAME[type] ?? "מסמך"} ${d.DocumentNumber}`,
+        received_by_partner_id: c.fixedPartner || received_on < c.bizFrom ? c.partnerId : null, reference: `${TYPE_NAME[type] ?? "מסמך"} ${d.DocumentNumber}`,
         customer_name: d.CustomerName ?? null, customer_ref: ref, pdf_url: d.pdfUrl || null,
         notes: d.Title ? String(d.Title).slice(0, 300) : null,
       });

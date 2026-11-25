@@ -2,7 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { must, supabase } from "./supabase";
 
-export type Partner = { id: string; name: string; email: string | null; user_id: string | null };
+export type Partner = { id: string; name: string; email: string | null; user_id: string | null; business_share?: number | null };
 export type Project = {
   id: string; name: string; type: string; status: string; client_id: string | null;
   agreed_price: number | null; notes: string | null; started_on: string | null; closed_on: string | null; delivered_on?: string | null; clients?: { name: string } | null;
@@ -25,10 +25,11 @@ export type Income = {
   id: string; received_on: string; amount: number; method: string | null; notes: string | null;
   reference: string | null; receipt_path: string | null; project_id: string | null; client_id?: string | null; received_by_partner_id: string | null;
   // synced from Yesh Invoice: source "yeshinvoice", the name on the receipt and its PDF
+  for_partner_id?: string | null; // income that belongs to one partner only
   source?: string; customer_name?: string | null; pdf_url?: string | null; vat_amount?: number | null; doc_type?: number | null;
   projects?: { name: string } | null; partners?: { name: string } | null; clients?: { name: string } | null;
 };
-export type Settlement = { id: string; settled_on: string; amount: number; from_partner_id: string; to_partner_id: string; notes: string | null };
+export type Settlement = { id: string; settled_on: string; amount: number; from_partner_id: string | null; to_partner_id: string | null; notes: string | null };
 export type Task = {
   id: string; title: string; description: string | null; status: string; due_on: string | null; start_on: string | null; priority: number;
   created_at: string; completed_at: string | null; work_plan_id: string | null; project_id: string | null; assignee_partner_id: string | null; is_private: boolean; projects?: { name: string } | null; partners?: { name: string } | null;
@@ -54,7 +55,7 @@ export type RecurringCost = { id: string; name: string; amount: number; frequenc
 const q = <T,>(key: unknown[], fn: () => PromiseLike<{ data: unknown; error: { message: string } | null }>) =>
   useQuery<T>({ queryKey: key, queryFn: async () => must((await fn()) as { data: T; error: { message: string } | null }) });
 
-export const usePartners = () => q<Partner[]>(["partners"], () => supabase.from("partners").select("id,name,email,user_id").order("name"));
+export const usePartners = () => q<Partner[]>(["partners"], () => supabase.from("partners").select("id,name,email,user_id,business_share").order("name"));
 export const useProjects = () => q<Project[]>(["projects"], () => supabase.from("projects").select("*,clients(name)").order("name"));
 export const useClients = () => q<Client[]>(["clients"], () => supabase.from("clients").select("*").order("name"));
 export const useFinancials = () => q<Financials[]>(["financials"], () => supabase.from("project_financials").select("*"));
@@ -73,6 +74,36 @@ export const useIncome = () => q<Income[]>(["income"], () =>
   supabase.from("income").select("*,projects(name),partners(name),clients(name)").order("received_on", { ascending: false }).limit(500));
 export const useSettlements = () => q<Settlement[]>(["settlements"], () =>
   supabase.from("settlements").select("*").order("settled_on", { ascending: false }));
+// Partner ledger (כרטסת): one row per partner per money event, oldest first, with a running balance.
+// credit (זכות): she paid for the business, sent a transfer, or is entitled to part of an income.
+// debit (חובה): her share of an expense, or business money that reached her. balance > 0: she is owed.
+export type LedgerKind = "expense" | "income" | "transfer" | "withdrawal" | "deposit" | "vat";
+export type LedgerRow = {
+  partner_id: string; partner_name: string; on_date: string; created_at: string; kind: LedgerKind; ref_id: string;
+  description: string; project_id: string | null; project_name: string | null; total: number; actor_id: string | null; actor_name: string | null;
+  credit: number; debit: number; share_pct: number | null; balance: number;
+};
+export const useLedger = () => q<LedgerRow[]>(["balances", "ledger"], () =>
+  supabase.from("partner_ledger").select("*").order("on_date").order("created_at").order("ref_id").limit(5000));
+// The business bank account / credit card: money in and out, with a running balance.
+export type BusinessRow = { on_date: string; created_at: string; kind: "income" | "expense" | "withdrawal" | "deposit" | "tax"; ref_id: string; description: string; amount_in: number; amount_out: number; balance: number };
+export const useBusinessLedger = () => q<BusinessRow[]>(["balances", "business-ledger"], () =>
+  supabase.from("business_account_ledger").select("*").order("on_date").order("created_at").order("ref_id").limit(5000));
+// From this date the new split applies (Miri 62.5 / Riki 37.5 on expenses); before it everything stays as it was.
+// business_account_from: the business bank account and credit card exist from this date; new rows default to the business.
+export type LedgerSettings = { id: boolean; new_split_from: string; business_account_from?: string | null };
+export const useLedgerSettings = () => useQuery<LedgerSettings | null>({
+  queryKey: ["ledger-settings"],
+  queryFn: async () => { const { data } = await supabase.from("ledger_settings").select("*").maybeSingle(); return (data as LedgerSettings) ?? null; },
+});
+// The business account in partner pickers: "biz" in the form, null in the database.
+export const BIZ = "biz";
+export const BIZ_NAME = "חשבון העסק";
+// How the business shows up when choosing who paid or received.
+export const BIZ_PICK = "העסק (כרטיס / חשבון עסקי)";
+export const BIZ_FROM_DEFAULT = "2026-11-16";
+export const fromBiz = (v: string) => (v === BIZ || v === "" ? null : v);
+export const toBiz = (v: string | null | undefined) => v ?? BIZ;
 export const useRecurring = () => q<RecurringCost[]>(["recurring"], () => supabase.from("recurring_costs").select("*").order("name"));
 export const useTasks = () => q<Task[]>(["tasks"], () =>
   supabase.from("tasks").select("*,projects(name),partners(name)").order("due_on", { ascending: true, nullsFirst: false }));

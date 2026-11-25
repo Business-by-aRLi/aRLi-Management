@@ -2,7 +2,7 @@
 // Yesh Invoice, VAT and מקדמות paid, and one file for the accountant.
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
-  receiptUrl, useExpenses, useInvoiceSync, usePartners, useRemove, useSalesDocuments, useSave, useSaveTaxProfile,
+  BIZ, BIZ_NAME, BIZ_PICK, fromBiz, receiptUrl, useExpenses, useInvoiceSync, usePartners, useRemove, useSalesDocuments, useSave, useSaveTaxProfile,
   useTaxPayments, useTaxProfile, type Expense, type SalesDocument, type TaxKind, type TaxPayment, type TaxProfile,
 } from "../lib/data";
 import { date, money, today } from "../lib/format";
@@ -11,7 +11,7 @@ import {
   type BookExpense, type VatReport,
 } from "../lib/vat";
 import { Button, Card, Empty, ErrorNote, Field, IconButton, Input, Loading, Modal, Num, PageTitle, Pill, Segmented, Select, useConfirm } from "../components/ui";
-import { ExpenseForm, useMe } from "../components/forms";
+import { ExpenseForm, useBizFrom, useMe } from "../components/forms";
 
 type Tab = "period" | "sales" | "payments" | "settings";
 const TABS: [Tab, string][] = [["period", "דוח תקופתי"], ["sales", "מסמכי מכירה"], ["payments", "תשלומים"], ["settings", "הגדרות ומדריך"]];
@@ -290,7 +290,7 @@ function PaymentsView({ p }: { p: TaxProfile }) {
         <div key={x.id} className="row-line flex items-center justify-between gap-4 py-3">
           <span className="min-w-0 flex-1">
             <span className="block">{KIND[x.kind]} · {periodLabel(x.period_start, p)}</span>
-            <span className="block text-[14px] text-mute">{x.paid_on ? <>שולם <Num>{date(x.paid_on)}</Num></> : "לא שולם"}{x.paid_by_partner_id && ` · ${name(x.paid_by_partner_id)}`}{x.reference && <> · <Num>{x.reference}</Num></>}</span>
+            <span className="block text-[14px] text-mute">{x.paid_on ? <>שולם <Num>{date(x.paid_on)}</Num></> : "לא שולם"}{x.paid_on && ` · ${x.paid_by_partner_id ? name(x.paid_by_partner_id) : BIZ_NAME}`}{x.reference && <> · <Num>{x.reference}</Num></>}</span>
           </span>
           <span className="font-medium"><Num>{money(x.amount)}</Num></span>
           <IconButton icon="trash" label="מחיקת התשלום" onClick={async () => (await confirm({ title: "למחוק את התשלום?", body: `${KIND[x.kind]}, ${money(x.amount)}` })) && remove.mutate(x.id)} />
@@ -310,10 +310,12 @@ function PaymentForm({ p, initial, onDone }: { p: TaxProfile; initial?: Partial<
     kind: (initial?.kind ?? "vat") as TaxKind, period_start: initial?.period_start ?? periodOf(today(), p),
     amount: initial?.amount != null ? String(initial.amount) : "", paid_on: today(), paid_by_partner_id: "", reference: "",
   });
-  const payer = f.paid_by_partner_id || me?.id || "";
+  // From the day the business account opened, taxes are paid from it unless a partner is picked.
+  const bizFrom = useBizFrom();
+  const payer = f.paid_by_partner_id || (f.paid_on && f.paid_on < bizFrom ? me?.id : BIZ) || BIZ;
   async function submit(e: FormEvent) {
     e.preventDefault();
-    await save.mutateAsync({ values: { ...f, amount: Number(f.amount), paid_by_partner_id: payer || null, reference: f.reference.trim() || null } });
+    await save.mutateAsync({ values: { ...f, amount: Number(f.amount), paid_by_partner_id: fromBiz(payer), reference: f.reference.trim() || null } });
     onDone();
   }
   return (
@@ -332,6 +334,7 @@ function PaymentForm({ p, initial, onDone }: { p: TaxProfile; initial?: Partial<
       <Field label="תאריך תשלום"><Input type="date" value={f.paid_on} onChange={(e) => setF({ ...f, paid_on: e.target.value })} /></Field>
       <Field label="מי שילמה">
         <Select value={payer} onChange={(e) => setF({ ...f, paid_by_partner_id: e.target.value })}>
+          <option value={BIZ}>{BIZ_PICK}</option>
           {partners.data?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
         </Select>
       </Field>
