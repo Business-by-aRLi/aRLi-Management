@@ -15,7 +15,7 @@ import { useQueryClient } from "@tanstack/react-query";
 // חובה = her share of an expense, or business money that reached her (a client paid her, a withdrawal).
 // A positive balance means the business (or the other partner) owes her. The business account has its own card.
 
-const KIND: Record<LedgerKind | "tax", string> = {
+export const KIND: Record<LedgerKind | "tax", string> = {
   expense: "הוצאה", income: "הכנסה", transfer: "העברה", withdrawal: "משיכה", deposit: "הפקדה", vat: "מע״מ", tax: "מסים",
 };
 type KindFilter = "all" | "income" | "expense" | "moves";
@@ -23,11 +23,11 @@ const KIND_FILTERS: [KindFilter, string][] = [["all", "הכל"], ["income", "ה�
 const matches = (k: string, f: KindFilter) =>
   f === "all" || k === f || (f === "expense" && (k === "vat" || k === "tax")) || (f === "moves" && (k === "transfer" || k === "withdrawal" || k === "deposit"));
 
-const round = (n: number) => Math.round(n * 100) / 100;
+export const round = (n: number) => Math.round(n * 100) / 100;
 const side = (n: number) => (Math.abs(n) < 0.005 ? "מאוזנת" : n > 0 ? "זכות" : "חובה");
 
 // One line in the table, for a partner or for the business account.
-type Line = { key: string; on_date: string; kind: string; description: string; project_name?: string | null; meta: string; debit: number; credit: number; balance: number };
+export type Line = { key: string; on_date: string; kind: string; description: string; project_name?: string | null; meta: string; debit: number; credit: number; balance: number };
 
 export function useLedgerTotals() {
   const ledger = useLedger();
@@ -236,7 +236,7 @@ function metaOf(r: LedgerRow): string {
 }
 
 // Phone: one stacked row per movement.
-function LineCard({ r, biz }: { r: Line; biz: boolean }) {
+export function LineCard({ r, biz }: { r: Line; biz: boolean }) {
   const debit = r.debit > 0.004, credit = r.credit > 0.004;
   const [d, c] = biz ? ["יצא ", "נכנס "] : ["ח׳ ", "ז׳ "];
   return (
@@ -257,7 +257,7 @@ function LineCard({ r, biz }: { r: Line; biz: boolean }) {
   );
 }
 
-function LineRow({ r, biz }: { r: Line; biz: boolean }) {
+export function LineRow({ r, biz }: { r: Line; biz: boolean }) {
   return (
     <tr className="border-t border-[var(--line)] align-top">
       <td className="whitespace-nowrap px-2 py-2.5 text-mute"><Num>{date(r.on_date)}</Num></td>
@@ -272,7 +272,7 @@ function LineRow({ r, biz }: { r: Line; biz: boolean }) {
   );
 }
 
-function Balance({ n, biz }: { n: number; biz?: boolean }) {
+export function Balance({ n, biz }: { n: number; biz?: boolean }) {
   if (biz) return <Num className="whitespace-nowrap font-medium">{money(round(n))}</Num>;
   return <span className="whitespace-nowrap"><Num className="font-medium">{money(Math.abs(round(n)))}</Num> <span className="text-[12px] text-mute">{Math.abs(n) < 0.005 ? "" : n > 0 ? "זכ׳" : "ח׳"}</span></span>;
 }

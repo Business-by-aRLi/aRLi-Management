@@ -82,6 +82,25 @@ async function partnerByName(name?: string): Promise<Partner | null> {
   return all.find((p) => name.includes(p.name) || p.name.includes(name)) ?? null;
 }
 
+// The business account (bank account + business credit card) is a null payer / receiver in the database.
+const BIZ_LABEL = "חשבון העסק";
+const isBiz = (name?: string) => !!name && /עסק|ארלי|arli|business|אשראי העסקי|כרטיס העסק/i.test(name) && !/מירי|ריקי/.test(name);
+let bizFromCache: string | null = null;
+async function businessAccountFrom(): Promise<string> {
+  if (bizFromCache) return bizFromCache;
+  const { data } = await db.from("ledger_settings").select("business_account_from").maybeSingle();
+  bizFromCache = (data as { business_account_from?: string } | null)?.business_account_from ?? "2026-11-16";
+  return bizFromCache;
+}
+// Who paid or received: the named partner, the business when named, otherwise by date:
+// from the day the business account opened it is the business, before that the partner who is writing.
+async function holder(name: string | undefined, on: string, me: Partner): Promise<Partner | null> {
+  if (isBiz(name)) return null;
+  const p = await partnerByName(name);
+  if (p) return p;
+  return on >= await businessAccountFrom() ? null : me;
+}
+
 async function projectByName(name?: string): Promise<{ id: string; name: string; client_id: string | null } | null> {
   if (!name) return null;
   const { data } = await db.from("projects").select("id,name,client_id").ilike("name", `%${name}%`).limit(2);
@@ -161,11 +180,13 @@ async function memoriesFor(me: Partner) {
 // ---------- tools the model can call ----------
 const S = (type: string, description?: string, extra: Record<string, unknown> = {}) => ({ type, description, ...extra });
 const PARTNER = S("string", "שם השותפה", { enum: ["מירי", "ריקי"] });
+// Who paid or received: a partner, or the business account itself (bank account + business credit card).
+const HOLDER = S("string", "מירי, ריקי, או העסק (חשבון הבנק / כרטיס האשראי של העסק)", { enum: ["מירי", "ריקי", "העסק"] });
 
 const toolDeclarations = [
   {
     name: "add_expense",
-    description: "רישום הוצאה. אם לא נאמר אחרת, מי ששילמה היא השותפה שכותבת. בלי פרויקט = הוצאה כללית של העסק.",
+    description: "רישום הוצאה. מי ששילמה: אם לא נאמר אחרת, הוצאה מיום פתיחת חשבון העסק ואילך שולמה בכרטיס האשראי של העסק (paid_by=העסק), והוצאה לפני כן שולמה ע\"י השותפה שכותבת. רק כשהשותפה אומרת ששילמה מכיסה / בכרטיס הפרטי, paid_by הוא השם שלה. בלי פרויקט = הוצאה כללית של העסק.",
     parameters: S("object", undefined, {
       properties: {
         amount: S("number", "סכום בשקלים"),
@@ -173,7 +194,7 @@ const toolDeclarations = [
         vendor: S("string", "הספק: למי שולם הכסף (חברה, חנות או אדם), למשל Vercel, אופיס דיפו"),
         spent_on: S("string", "תאריך YYYY-MM-DD"),
         project_name: S("string"),
-        paid_by: PARTNER,
+        paid_by: HOLDER,
         category: S("string", "קטגוריה, למשל תוכנה, ציוד, נסיעות, פרסום"),
         reference: S("string", "מספר חשבונית או אסמכתה"),
         notes: S("string", "הערה, למשל הסכום המקורי במטבע זר"),
@@ -186,20 +207,20 @@ const toolDeclarations = [
   },
   {
     name: "add_income",
-    description: "רישום הכנסה מלקוח. אם לא נאמר אחרת, מי שקיבלה היא השותפה שכותבת.",
+    description: "רישום הכנסה מלקוח. לאן נכנס הכסף: אם לא נאמר אחרת, מיום פתיחת חשבון העסק ואילך לחשבון העסק (received_by=העסק), ולפני כן לשותפה שכותבת. רק כשהשותפה אומרת שהכסף הגיע אליה באופן פרטי, received_by הוא השם שלה.",
     parameters: S("object", undefined, {
       properties: {
         amount: S("number"), received_on: S("string", "YYYY-MM-DD"), project_name: S("string"),
-        received_by: PARTNER, method: S("string", "העברה, ביט, צ'ק, מזומן"), notes: S("string"),
+        received_by: HOLDER, method: S("string", "העברה, ביט, צ'ק, מזומן"), notes: S("string"),
       },
       required: ["amount"],
     }),
   },
   {
     name: "add_settlement",
-    description: "רישום העברת כסף בין השותפות (התחשבנות).",
+    description: "רישום העברת כסף: בין השותפות, משיכה מחשבון העסק לשותפה (from=העסק), או הפקדה של שותפה לחשבון העסק (to=העסק).",
     parameters: S("object", undefined, {
-      properties: { amount: S("number"), from: PARTNER, to: PARTNER, settled_on: S("string"), notes: S("string") },
+      properties: { amount: S("number"), from: HOLDER, to: HOLDER, settled_on: S("string"), notes: S("string") },
       required: ["amount", "from", "to"],
     }),
   },
@@ -321,7 +342,7 @@ const toolDeclarations = [
       required: ["project_name"],
     }),
   },
-  { name: "get_balance", description: "ההתחשבנות בין השותפות על ההוצאות (כל הוצאה מתחלקת חצי-חצי): כמה כל אחת שילמה מכיסה, מה החצי שלה מכל ההוצאות, וסה\"כ היתרה. בנפרד: הרווח של העסק, וחלוקת הרווח (כמה כל אחת אמורה לקבל לפי החלוקה בכל פרויקט, בניכוי ההוצאות).", parameters: S("object", undefined, { properties: {} }) },
+  { name: "get_balance", description: "המאזן: רווח העסק, היתרה בחשבון העסק (בנק ואשראי עסקי, מה נכנס ויצא החודש), והכרטסת של כל שותפה (זכות/חובה מול העסק, כמה שילמה מכיסה, חלקה בהוצאות ובהכנסות)", parameters: S("object", undefined, { properties: {} }) },
   {
     name: "list_projects", description: "רשימת פרויקטים עם הכנסות, הוצאות ורווח.",
     parameters: S("object", undefined, { properties: { status: S("string", "שלב: planning=בתכנון, setup=בהקמה, implementation=בהטמעה, active=פעיל, archived=ארכיון", { enum: ["planning", "setup", "implementation", "active", "archived"] }) } }),
@@ -333,7 +354,7 @@ const toolDeclarations = [
       properties: {
         kind: S("string", undefined, { enum: ["expenses", "income"] }),
         from: S("string", "YYYY-MM-DD"), to: S("string", "YYYY-MM-DD"),
-        project_name: S("string"), partner: PARTNER, limit: S("integer"),
+        project_name: S("string"), partner: S("string", "מי שילמה / קיבלה. העסק = רק מה ששולם מחשבון העסק או נכנס אליו", { enum: ["מירי", "ריקי", "העסק"] }), limit: S("integer"),
       },
       required: ["kind"],
     }),
@@ -449,7 +470,8 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
   switch (name) {
     case "add_expense": {
       const project = await projectByName(a.project_name);
-      const payer = (await partnerByName(a.paid_by)) ?? me;
+      const spentOn = a.spent_on ?? ctx.today;
+      const payer = await holder(a.paid_by, spentOn, me);
       if (a.gmail_message_id) {
         const dup = check(await db.from("expenses").select("id,spent_on,amount").eq("gmail_message_id", a.gmail_message_id).maybeSingle());
         if (dup) return { ok: false, error: "החשבונית מהמייל הזה כבר רשומה", existing: dup };
@@ -458,14 +480,14 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
         ? a.receipt_path
         : (a.attach_receipt !== false ? ctx.receiptPath : null);
       const row = check(await db.from("expenses").insert({
-        amount: a.amount, description: a.description, vendor: a.vendor || null, spent_on: a.spent_on ?? ctx.today,
-        project_id: project?.id ?? null, paid_by_partner_id: payer.id, category: a.category ?? null,
+        amount: a.amount, description: a.description, vendor: a.vendor || null, spent_on: spentOn,
+        project_id: project?.id ?? null, paid_by_partner_id: payer?.id ?? null, category: a.category ?? null,
         reference: a.reference ?? null, notes: a.notes ?? null,
         receipt_path: receiptPath, gmail_message_id: a.gmail_message_id ?? null,
       }).select("id").single());
       await notifyOthers(me, `💸 ${me.name} רשמה הוצאה: ${fmtMoney(a.amount)} על ${a.description}${a.vendor ? ` (${a.vendor})` : ""}` +
-        `${project ? ` (${project.name})` : ""}, שולם על ידי ${payer.name}.`);
-      return { ok: true, id: row.id, project: project?.name ?? "כללי לעסק", paid_by: payer.name, receipt_saved: !!receiptPath };
+        `${project ? ` (${project.name})` : ""}, ${payer ? `שולם על ידי ${payer.name}` : "שולם מחשבון העסק"}.`);
+      return { ok: true, id: row.id, project: project?.name ?? "כללי לעסק", paid_by: payer?.name ?? BIZ_LABEL, receipt_saved: !!receiptPath };
     }
     case "connect_gmail":
     case "connect_google": {
@@ -511,23 +533,28 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
       return await readGmailInvoice(me, a.message_id, a.attachment_name);
     case "add_income": {
       const project = await projectByName(a.project_name);
-      const receiver = (await partnerByName(a.received_by)) ?? me;
+      const receivedOn = a.received_on ?? ctx.today;
+      const receiver = await holder(a.received_by, receivedOn, me);
       const row = check(await db.from("income").insert({
-        amount: a.amount, received_on: a.received_on ?? ctx.today, project_id: project?.id ?? null,
-        client_id: project?.client_id ?? null, received_by_partner_id: receiver.id,
+        amount: a.amount, received_on: receivedOn, project_id: project?.id ?? null,
+        client_id: project?.client_id ?? null, received_by_partner_id: receiver?.id ?? null,
         method: a.method ?? null, notes: a.notes ?? null,
       }).select("id").single());
-      await notifyOthers(me, `💰 ${me.name} רשמה הכנסה: ${fmtMoney(a.amount)}${project ? ` מ-${project.name}` : ""}, התקבל אצל ${receiver.name}.`);
-      return { ok: true, id: row.id, received_by: receiver.name };
+      await notifyOthers(me, `💰 ${me.name} רשמה הכנסה: ${fmtMoney(a.amount)}${project ? ` מ-${project.name}` : ""}, ${receiver ? `התקבל אצל ${receiver.name}` : "נכנס לחשבון העסק"}.`);
+      return { ok: true, id: row.id, received_by: receiver?.name ?? BIZ_LABEL };
     }
     case "add_settlement": {
-      const from = await partnerByName(a.from), to = await partnerByName(a.to);
-      if (!from || !to) throw new Error("צריך לציין ממי ולמי.");
+      if (!a.from || !a.to) throw new Error("צריך לציין ממי ולמי.");
+      const from = isBiz(a.from) ? null : await partnerByName(a.from), to = isBiz(a.to) ? null : await partnerByName(a.to);
+      if ((!from && !isBiz(a.from)) || (!to && !isBiz(a.to))) throw new Error("צריך לציין ממי ולמי.");
+      if (!from && !to) throw new Error("העברה מהעסק לעסק אינה העברה.");
       const row = check(await db.from("settlements").insert({
-        amount: a.amount, from_partner_id: from.id, to_partner_id: to.id,
+        amount: a.amount, from_partner_id: from?.id ?? null, to_partner_id: to?.id ?? null,
         settled_on: a.settled_on ?? ctx.today, notes: a.notes ?? null,
       }).select("id").single());
-      await notifyOthers(me, `🔁 נרשמה העברה: ${fmtMoney(a.amount)} מ${from.name} ל${to.name}.`);
+      const what = !from ? `${to!.name} משכה ${fmtMoney(a.amount)} מחשבון העסק` : !to ? `${from.name} הפקידה ${fmtMoney(a.amount)} לחשבון העסק`
+        : `העברה: ${fmtMoney(a.amount)} מ${from.name} ל${to.name}`;
+      await notifyOthers(me, `🔁 נרשמה ${what}.`);
       return { ok: true, id: row.id };
     }
     case "add_task": {
@@ -673,15 +700,32 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
       return { ok: true, project: project.name };
     }
     case "get_balance": {
-      // The settlement is expenses only, every expense split half-half. Profit is shown apart, with no split.
-      const rows = check(await db.from("expense_settlement").select("name,paid,her_half,balance")) as { name: string; paid: number; her_half: number; balance: number }[];
-      const business = check(await db.from("business_summary").select("income,project_expenses,general_expenses,profit,outstanding,expected_profit").single());
+      // The partner ledger (כרטסת) and the business account, the same numbers the app shows.
+      const [business, account, ledger] = await Promise.all([
+        db.from("business_summary").select("income,project_expenses,general_expenses,profit,outstanding,expected_profit").single(),
+        db.from("business_account_summary").select("*").single(),
+        db.from("partner_ledger").select("partner_name,kind,credit,debit").limit(10000),
+      ]);
+      const rows = (check(ledger) ?? []) as { partner_name: string; kind: string; credit: number; debit: number }[];
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      const partnersOut = [...new Set(rows.map((r) => r.partner_name))].map((name) => {
+        const mine = rows.filter((r) => r.partner_name === name);
+        const sum = (kinds: string[], f: "credit" | "debit") => r2(mine.filter((r) => kinds.includes(r.kind)).reduce((t, r) => t + Number(r[f]), 0));
+        const moves = ["transfer", "withdrawal", "deposit"];
+        return {
+          name, balance: r2(mine.reduce((t, r) => t + Number(r.credit) - Number(r.debit), 0)),
+          paid_from_pocket: sum(["expense", "vat"], "credit"), expense_share: sum(["expense"], "debit"),
+          income_share: sum(["income"], "credit"), income_received_privately: sum(["income"], "debit"),
+          moves_net: r2(sum(moves, "credit") - sum(moves, "debit")),
+        };
+      });
       return {
-        business,
-        partners: rows,
-        profit_split: await profitSplit(),
-        explain: "Settlement covers expenses only: paid = what she paid from her own pocket; her_half = her half of all expenses; balance = paid - her_half (> 0 = money comes back to her, < 0 = she owes). " +
-          "profit_split is separate from the settlement: per partner, projects = her share of each project's profit (income minus project expenses) by that project's split rule (percent or fixed amount); general = half of the general net (income minus expenses not tied to a project, split 50/50); total = projects + general = what she should get from the profits; expected_total includes money still owed by clients; received = what she got so far from the business's money (client payments she received plus net transfers between the partners). Never say a partner 'holds' money.",
+        business: check(business),
+        business_account: check(account),
+        partners: partnersOut,
+        explain: "business_account = the business's own bank account and business credit card (not Miri's and not Riki's): balance, client_income that reached it, card_expenses, taxes, withdrawals to partners, deposits from partners, month_in / month_out this month. " +
+          "partners = each partner's ledger (כרטסת). balance > 0 = זכות (the business owes her), < 0 = חובה (she owes the business). paid_from_pocket counts only what she paid privately; expenses paid by the business card are not hers, she carries only her share (expense_share). " +
+          "Expenses are shared by the business split, income by the project split. Never say a partner 'holds' money.",
       };
     }
     case "list_projects": {
@@ -700,7 +744,7 @@ async function runTool(name: string, a: any, ctx: Ctx): Promise<unknown> {
       if (a.from) q = q.gte(dateCol, a.from);
       if (a.to) q = q.lte(dateCol, a.to);
       if (a.project_name) q = q.eq("project_id", (await projectByName(a.project_name))!.id);
-      if (a.partner) q = q.eq(partnerCol, (await partnerByName(a.partner))?.id);
+      if (a.partner) q = isBiz(a.partner) ? q.is(partnerCol, null) : q.eq(partnerCol, (await partnerByName(a.partner))?.id);
       const rows = check(await q.order(dateCol, { ascending: false }).limit(a.limit ?? 30)) as { amount: number }[];
       return { rows, total: rows.reduce((s, r) => s + Number(r.amount), 0) };
     }
@@ -995,10 +1039,10 @@ function systemPrompt(me: Partner, memories: { id: string; content: string; part
 - ההיסטוריה עשויה לכלול שורות "[מידע פנימי: ...]" עם תוצאות כלים מתורות קודמות. השתמשי בהן (למשל ב-message_id וב-receipt_path), אבל לעולם אל תכתבי אותן בתשובה.
 
 כללים:
-- הבעלות על הכסף: אין לעסק חשבון בנק. כל הוצאה שולמה מהחשבון הפרטי של אחת השותפות, וכל הכנסה התקבלה אצל אחת מהן.
-- ההתחשבנות בין השותפות היא על ההוצאות בלבד: כל הוצאה (של פרויקט או כללית) מתחלקת חצי-חצי. לכל אחת: כמה שילמה מכיסה, מה החצי שלה מכל ההוצאות, וסה"כ יתרה.
-- הרווח של העסק וחלוקת הרווח מוצגים בנפרד מההתחשבנות. חלוקת הרווח: כל אחת מקבלת את חלקה ברווח של כל פרויקט (הכנסות פחות הוצאות הפרויקט) לפי החלוקה שהוגדרה בו, פחות חצי מההוצאות הכלליות. אף פעם לא לומר שמישהי "מחזיקה" כסף.
-- אחרי כל רישום, אשרי במשפט אחד מה נרשם (סכום, תאריך, פרויקט, מי שילמה).
+- הבעלות על הכסף: לעסק יש חשבון בנק וכרטיס אשראי משלו (מיום פתיחת החשבון, 16.11.2026). מאז, הוצאה שולמה בכרטיס העסק והכנסה נכנסה לחשבון העסק, אלא אם השותפה אומרת במפורש ששילמה מכיסה או שהכסף הגיע אליה. לפני כן הכל שולם מהחשבונות הפרטיים של השותפות.
+- כרטסת: לכל שותפה יתרת זכות או חובה מול העסק. הוצאה מכרטיס העסק לא נזקפת לאף אחת כ"שילמה מכיסה"; כל אחת נושאת רק את חלקה בהוצאה. הוצאות מתחלקות לפי חלוקת העסק, והכנסות לפי החלוקה של הפרויקט. משיכה מחשבון העסק והפקדה אליו נרשמות עם add_settlement (from=העסק או to=העסק).
+- אף פעם לא לומר שמישהי "מחזיקה" כסף.
+- אחרי כל רישום, אשרי במשפט אחד מה נרשם (סכום, תאריך, פרויקט, ומי שילמה: שותפה או כרטיס העסק).
 - לפני מחיקה, בקשי אישור מפורש.
 - אל תמציאי נתונים. אם חסר משהו חיוני, כמו סכום, שאלי.
 - בלי Markdown: טקסט פשוט, אפשר אימוג'י במידה.
@@ -1084,7 +1128,7 @@ const COMMANDS = [
   { command: "menu", description: "תפריט כפתורים ראשי" },
   { command: "today", description: "מה יש לי היום" },
   { command: "tasks", description: "המשימות הפתוחות שלי" },
-  { command: "balance", description: "ההתחשבנות בינינו" },
+  { command: "balance", description: "המאזן: חשבון העסק והכרטסת" },
   { command: "expense", description: "הוצאה חדשה" },
   { command: "income", description: "הכנסה חדשה" },
   { command: "meeting", description: "פגישה חדשה" },
@@ -1244,51 +1288,22 @@ async function showWeek(me: Partner, chatId: number) {
   await send(chatId, lines.join("\n"));
 }
 
-// What each partner should get from the profits: her share of every project's profit by that project's
-// split rule (after its expenses), plus half of the general net (general income minus general costs, 50/50).
-async function profitSplit() {
-  const [ps, shares, gi, ge, ps2] = await Promise.all([
-    partners(),
-    db.from("project_partner_shares").select("partner_id,amount,expected_amount"),
-    db.from("income").select("amount").is("project_id", null),
-    db.from("expenses").select("amount").is("project_id", null),
-    db.from("partner_summary").select("partner_id,received"),
-  ]);
-  const received = check(ps2) as { partner_id: string; received: number }[];
-  const sum = (rows: { amount: number }[] | null) => (rows ?? []).reduce((t, r) => t + Number(r.amount), 0);
-  const generalHalf = (sum(check(gi)) - sum(check(ge))) / Math.max(ps.length, 1);
-  const rows = check(shares) as { partner_id: string; amount: number; expected_amount: number }[];
-  const r2 = (n: number) => Math.round(n * 100) / 100;
-  return ps.map((p) => {
-    const mine = rows.filter((s) => s.partner_id === p.id);
-    const projects = mine.reduce((t, s) => t + Number(s.amount), 0);
-    const expected = mine.reduce((t, s) => t + Number(s.expected_amount), 0);
-    const got = Number(received.find((r) => r.partner_id === p.id)?.received ?? 0);
-    return { name: p.name, projects: r2(projects), general: r2(generalHalf), total: r2(projects + generalHalf), expected_total: r2(expected + generalHalf), received: r2(got) };
-  });
-}
-
 async function showBalance(me: Partner, chatId: number) {
   const bal = (await runTool("get_balance", {}, { me, receiptPath: null, today: israelNow().date })) as {
     // deno-lint-ignore no-explicit-any
-    business: any;
-    partners: { name: string; paid: number; her_half: number; balance: number }[];
-    profit_split: { name: string; projects: number; general: number; total: number; expected_total: number; received: number }[];
+    business: any; business_account: any;
+    partners: { name: string; balance: number; paid_from_pocket: number; expense_share: number; income_share: number; income_received_privately: number; moves_net: number }[];
   };
-  const b = bal.business ?? {};
-  const lines = ["⚖️ התחשבנות", ""];
-  lines.push(`🏢 העסק: רווח ${fmtMoney(b.profit ?? 0)} (הכנסות ${fmtMoney(b.income ?? 0)}, הוצאות פרויקטים ${fmtMoney(b.project_expenses ?? 0)}, הוצאות כלליות ${fmtMoney(b.general_expenses ?? 0)})`);
-  const pending = Number(b.outstanding ?? 0) > 0.005;
-  if (pending) lines.push(`🔮 רווח צפוי ${fmtMoney(b.expected_profit ?? 0)} · פער: עוד ${fmtMoney(b.outstanding)} מלקוחות`);
-  lines.push("", "💳 הוצאות, חצי-חצי:");
+  const b = bal.business ?? {}, acc = bal.business_account ?? {};
+  const lines = ["⚖️ מאזן", ""];
+  lines.push(`🏢 רווח העסק ${fmtMoney(b.profit ?? 0)} (הכנסות ${fmtMoney(b.income ?? 0)}, הוצאות פרויקטים ${fmtMoney(b.project_expenses ?? 0)}, הוצאות כלליות ${fmtMoney(b.general_expenses ?? 0)})`);
+  if (Number(b.outstanding ?? 0) > 0.005) lines.push(`🔮 רווח צפוי ${fmtMoney(b.expected_profit ?? 0)} · עוד ${fmtMoney(b.outstanding)} מלקוחות`);
+  lines.push("", `🏦 חשבון העסק: יתרה ${fmtMoney(acc.balance ?? 0)}`);
+  lines.push(`החודש נכנס ${fmtMoney(acc.month_in ?? 0)} · יצא ${fmtMoney(acc.month_out ?? 0)}`);
+  lines.push("", "📒 כרטסת:");
   for (const p of bal.partners) {
-    lines.push(`${p.name}: שילמה מכיסה ${fmtMoney(p.paid)} · החצי שלה מכל ההוצאות ${fmtMoney(p.her_half)} · סה"כ יתרה ${fmtMoney(p.balance)}`);
-  }
-  lines.push("", "📈 חלוקת הרווח (לפי החלוקה בכל פרויקט, בניכוי ההוצאות):");
-  for (const p of bal.profit_split) {
-    const general = p.general <= 0 ? `פחות חצי מההוצאות הכלליות ${fmtMoney(-p.general)}` : `ועוד חצי מההכנסות הכלליות ${fmtMoney(p.general)}`;
-    lines.push(`${p.name}: מהפרויקטים ${fmtMoney(p.projects)} · ${general} · אמורה לקבל מהרווח ${fmtMoney(p.total)}` +
-      `${pending ? ` · לפי הצפי ${fmtMoney(p.expected_total)}` : ""} · קיבלה עד עכשיו מכספי העסק ${fmtMoney(p.received)}`);
+    const side = Math.abs(p.balance) < 0.005 ? "מאוזנת" : p.balance > 0 ? `זכות ${fmtMoney(p.balance)}` : `חובה ${fmtMoney(-p.balance)}`;
+    lines.push(`${p.name}: ${side} · שילמה מכיסה ${fmtMoney(p.paid_from_pocket)} · חלקה בהוצאות ${fmtMoney(p.expense_share)} · חלקה בהכנסות ${fmtMoney(p.income_share)}`);
   }
   await send(chatId, lines.join("\n"));
 }

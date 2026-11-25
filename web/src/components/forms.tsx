@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
 import { today } from "../lib/format";
-import { BIZ, fromBiz, toBiz, uploadReceipt, useExpenses, usePartners, useProjects, useSave, useTaxProfile, type Expense, type VatDoc, type Income, type Task, type Meeting, type MeetingKind } from "../lib/data";
+import { BIZ, BIZ_FROM_DEFAULT, BIZ_PICK, fromBiz, toBiz, uploadReceipt, useExpenses, useLedgerSettings, usePartners, useProjects, useSave, useTaxProfile, type Expense, type VatDoc, type Income, type Task, type Meeting, type MeetingKind } from "../lib/data";
 import { Button, Field, Input, Segmented, Select, Textarea } from "./ui";
 import { currentQuarter, PlanPicker, ProjectPicker } from "./Pickers";
 import { ClientPicker, resolveClient, type ClientChoice } from "./ClientPicker";
@@ -24,6 +24,29 @@ function PartnerSelect({ value, onChange, allowNone, business }: { value: string
       {partners.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
     </Select>
   );
+}
+
+// The day the business bank account and credit card opened. From then on, money goes through the business.
+export function useBizFrom() {
+  return useLedgerSettings().data?.business_account_from ?? BIZ_FROM_DEFAULT;
+}
+
+// A new row's payer/receiver follows its date until the partner picks one herself:
+// from the day the business account opened it is the business, before that the partner who is signed in.
+function useHolderByDate(isNew: boolean, on: string, value: string, setValue: (v: string) => void) {
+  const me = useMe();
+  const from = useBizFrom();
+  const [touched, setTouched] = useState(!isNew);
+  useEffect(() => {
+    if (touched) return;
+    const want = on && on < from && me ? me.id : BIZ;
+    if (want !== value) setValue(want);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [on, from, me?.id, touched]);
+  const hint = value === BIZ && on && on < from
+    ? `חשבון העסק נפתח ב-${from.split("-").reverse().join(".")}. לפני כן שילמתן מכיסכן.`
+    : value === BIZ ? "לא נזקף לאף שותפה. נכנס לדף התנועות של העסק." : undefined;
+  return { pick: (v: string) => { setTouched(true); setValue(v); }, hint };
 }
 
 function IncomeOwnerSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
@@ -78,6 +101,7 @@ export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel, conte
   const showVat = !!tax && tax.vat_status === "licensed" && f.spent_on >= tax.licensed_from;
   const rate = Number(tax?.vat_rate ?? 18);
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
+  const payer = useHolderByDate(!row && !initial?.paid_by_partner_id, f.spent_on, f.paid_by_partner_id, (v) => setF((x) => ({ ...x, paid_by_partner_id: v })));
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -106,7 +130,7 @@ export function ExpenseForm({ row, onDone, initial, receiptPath, onCancel, conte
       <Field label="על מה"><Input required value={f.description} onChange={(e) => set("description")(e.target.value)} /></Field>
       <Field label="ספק"><Input list="expense-vendors" value={f.vendor} onChange={(e) => set("vendor")(e.target.value)} placeholder="Vercel, אופיס דיפו…" /><VendorList /></Field>
       <Field label="פרויקט"><ProjectPicker value={f.project_id} onChange={set("project_id")} {...context} /></Field>
-      <Field label="מי שילמה"><PartnerSelect value={f.paid_by_partner_id} onChange={set("paid_by_partner_id")} business="אשראי / חשבון העסק" /></Field>
+      <Field label="מי שילמה" hint={payer.hint}><PartnerSelect value={f.paid_by_partner_id} onChange={payer.pick} business={BIZ_PICK} /></Field>
       <Field label="קטגוריה"><Input list="expense-categories" value={f.category} onChange={(e) => set("category")(e.target.value)} placeholder="תוכנה, ציוד, נסיעות…" /><CategoryList /></Field>
       <Field label="אסמכתה"><Input value={f.reference} onChange={(e) => set("reference")(e.target.value)} /></Field>
       <div className="sm:col-span-2"><Field label="הערות"><Input value={f.notes} onChange={(e) => set("notes")(e.target.value)} /></Field></div>
@@ -174,6 +198,7 @@ export function IncomeForm({ row, onDone, initial, receiptPath, onCancel, contex
   const synced = row?.source === "yeshinvoice";
   const [client, setClient] = useState<ClientChoice>({ id: row?.client_id ?? "", newName: row?.customer_name ?? "" });
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
+  const receiver = useHolderByDate(!row && !initial?.received_by_partner_id, f.received_on, f.received_by_partner_id, (v) => setF((x) => ({ ...x, received_by_partner_id: v })));
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -199,7 +224,7 @@ export function IncomeForm({ row, onDone, initial, receiptPath, onCancel, contex
       {synced && row?.customer_name && <p className="text-[14px] text-mute sm:col-span-2">מיש חשבונית · {row.reference} · על שם {row.customer_name}</p>}
       <Field label="פרויקט"><ProjectPicker value={f.project_id} onChange={set("project_id")} none="בלי פרויקט" {...context} /></Field>
       {synced && !projects.data?.find((p) => p.id === f.project_id)?.client_id && <Field label="לקוח"><ClientPicker value={client} onChange={setClient} /></Field>}
-      <Field label="לאן נכנס הכסף"><PartnerSelect value={f.received_by_partner_id} onChange={set("received_by_partner_id")} business="חשבון העסק" /></Field>
+      <Field label="לאן נכנס הכסף" hint={receiver.hint}><PartnerSelect value={f.received_by_partner_id} onChange={receiver.pick} business={BIZ_PICK} /></Field>
       <Field label="של מי ההכנסה" hint="לכרטסת: לפי חלוקת הפרויקט, או כולה של שותפה אחת">
         <IncomeOwnerSelect value={f.for_partner_id} onChange={set("for_partner_id")} />
       </Field>
@@ -248,8 +273,8 @@ export function SettlementForm({ from, to, amount, onDone }: { from?: string; to
   }
   return (
     <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
-      <Field label="ממי"><PartnerSelect value={f.from_partner_id} onChange={set("from_partner_id")} allowNone="בחרי" business="חשבון העסק (משיכה)" /></Field>
-      <Field label="למי"><PartnerSelect value={f.to_partner_id} onChange={set("to_partner_id")} allowNone="בחרי" business="חשבון העסק (הפקדה)" /></Field>
+      <Field label="ממי"><PartnerSelect value={f.from_partner_id} onChange={set("from_partner_id")} allowNone="בחרי" business="העסק (משיכה מהחשבון)" /></Field>
+      <Field label="למי"><PartnerSelect value={f.to_partner_id} onChange={set("to_partner_id")} allowNone="בחרי" business="העסק (הפקדה לחשבון)" /></Field>
       <Field label="סכום (₪)"><Input required type="number" step="0.01" min="0.01" value={f.amount} onChange={(e) => set("amount")(e.target.value)} /></Field>
       <Field label="תאריך"><Input required type="date" value={f.settled_on} onChange={(e) => set("settled_on")(e.target.value)} /></Field>
       <div className="sm:col-span-2"><Field label="הערות"><Input value={f.notes} onChange={(e) => set("notes")(e.target.value)} /></Field></div>

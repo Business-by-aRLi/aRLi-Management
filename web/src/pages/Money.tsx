@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Ledger } from "../components/Ledger";
+import { BusinessAccount } from "../components/BusinessAccount";
 import {
-  BIZ, BIZ_NAME, receiptUrl, useExpenses, useIncome, usePartners, useProjects, useRecurring, useRemove, useSave, useSettlements,
+  BIZ, BIZ_NAME, BIZ_PICK, receiptUrl, useExpenses, useIncome, usePartners, useProjects, useRecurring, useRemove, useSave, useSettlements,
   type Expense, type Income, type RecurringCost,
 } from "../lib/data";
 import { date, money } from "../lib/format";
@@ -10,8 +11,8 @@ import { Button, Card, Empty, ErrorNote, Field, IconButton, Input, Loading, Moda
 import { ExpenseForm, IncomeForm, SettlementForm } from "../components/forms";
 import { DocumentUpload } from "../components/DocumentUpload";
 
-type Tab = "expenses" | "income" | "settlements" | "recurring" | "ledger";
-const TABS: [Tab, string][] = [["expenses", "הוצאות"], ["income", "הכנסות"], ["ledger", "כרטסת"], ["settlements", "העברות ומשיכות"], ["recurring", "שוטפות"]];
+type Tab = "expenses" | "income" | "settlements" | "recurring" | "ledger" | "business";
+const TABS: [Tab, string][] = [["expenses", "הוצאות"], ["income", "הכנסות"], ["business", "חשבון העסק"], ["ledger", "כרטסת"], ["settlements", "העברות ומשיכות"], ["recurring", "שוטפות"]];
 
 export default function Money() {
   const [params, setParams] = useSearchParams();
@@ -35,6 +36,7 @@ export default function Money() {
 
       {tab === "expenses" && <ExpensesList onEdit={(row) => setModal({ kind: "expenses", row })} />}
       {tab === "income" && <IncomeList onEdit={(row) => setModal({ kind: "income", row })} />}
+      {tab === "business" && <BusinessAccount />}
       {tab === "ledger" && <Ledger />}
       {tab === "settlements" && <SettlementsList />}
       {tab === "recurring" && <RecurringList onEdit={(row) => setModal({ kind: "recurring", row })} onAdd={() => setModal({ kind: "recurring" })} />}
@@ -48,7 +50,7 @@ export default function Money() {
       <Modal open={modal?.kind === "document"} onClose={close} title="העלאת מסמך">
         <DocumentUpload onDone={close} />
       </Modal>
-      <Modal open={modal?.kind === "settlements"} onClose={close} title="העברה ביניכן">
+      <Modal open={modal?.kind === "settlements"} onClose={close} title="העברה, משיכה או הפקדה">
         <SettlementForm onDone={close} />
       </Modal>
       <Modal open={modal?.kind === "recurring"} onClose={close} title={modal?.row ? "עריכת עלות שוטפת" : "עלות שוטפת חדשה"}>
@@ -204,7 +206,7 @@ function RecurringForm({ row, onDone }: { row?: RecurringCost; onDone: () => voi
       </Field>
       <Field label="מי משלמת">
         <Select value={f.paid_by_partner_id} onChange={(e) => setF({ ...f, paid_by_partner_id: e.target.value })}>
-          <option value="">{BIZ_NAME}</option>{partners.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          <option value="">{BIZ_PICK}</option>{partners.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </Select>
       </Field>
       <Field label="פעיל">

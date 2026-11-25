@@ -229,7 +229,7 @@ export function BalanceModule() {
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
           <SettleLine totals={totals} />
-          {bizAcc.has && <span className="text-[14px] text-mute">בחשבון העסק <Num className="text-bone">{money(bizAcc.balance)}</Num></span>}
+          <Link to="/money?tab=business" className="text-[14px] text-mute hover:text-pink-soft">בחשבון העסק <Num className="text-bone">{money(bizAcc.balance)}</Num> ←</Link>
         </div>
       </section>
 

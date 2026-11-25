@@ -90,7 +90,8 @@ export type BusinessRow = { on_date: string; created_at: string; kind: "income" 
 export const useBusinessLedger = () => q<BusinessRow[]>(["balances", "business-ledger"], () =>
   supabase.from("business_account_ledger").select("*").order("on_date").order("created_at").order("ref_id").limit(5000));
 // From this date the new split applies (Miri 62.5 / Riki 37.5 on expenses); before it everything stays as it was.
-export type LedgerSettings = { id: boolean; new_split_from: string };
+// business_account_from: the business bank account and credit card exist from this date; new rows default to the business.
+export type LedgerSettings = { id: boolean; new_split_from: string; business_account_from?: string | null };
 export const useLedgerSettings = () => useQuery<LedgerSettings | null>({
   queryKey: ["ledger-settings"],
   queryFn: async () => { const { data } = await supabase.from("ledger_settings").select("*").maybeSingle(); return (data as LedgerSettings) ?? null; },
@@ -98,6 +99,9 @@ export const useLedgerSettings = () => useQuery<LedgerSettings | null>({
 // The business account in partner pickers: "biz" in the form, null in the database.
 export const BIZ = "biz";
 export const BIZ_NAME = "חשבון העסק";
+// How the business shows up when choosing who paid or received.
+export const BIZ_PICK = "העסק (כרטיס / חשבון עסקי)";
+export const BIZ_FROM_DEFAULT = "2026-11-16";
 export const fromBiz = (v: string) => (v === BIZ || v === "" ? null : v);
 export const toBiz = (v: string | null | undefined) => v ?? BIZ;
 export const useRecurring = () => q<RecurringCost[]>(["recurring"], () => supabase.from("recurring_costs").select("*").order("name"));
